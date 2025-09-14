@@ -1,0 +1,29 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure Curve Control Data Collection",
+        "description": "Help improve Curve Control by anonymously sharing usage data for analytics and algorithm optimization.",
+        "data": {
+          "collection_level": "Data Collection Level",
+          "data_endpoint": "Analytics Endpoint (Advanced)",
+          "api_key": "API Key (Optional)"
+        },
+        "data_description": {
+          "collection_level": "Choose how much data to share for analytics",
+          "data_endpoint": "URL of the analytics backend service",
+          "api_key": "API key for authentication (if required)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the analytics backend",
+      "invalid_endpoint": "Invalid analytics endpoint configuration",
+      "unknown": "Unexpected error occurred"
+    },
+    "abort": {
+      "already_configured": "Data collection is already configured",
+      "reconfigure_successful": "Successfully reconfigured data collection"
+    }
+  }
+}

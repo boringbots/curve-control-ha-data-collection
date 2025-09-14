@@ -1,0 +1,13 @@
+{
+  "domain": "curve_control_data",
+  "name": "Curve Control Data Collection",
+  "codeowners": ["@curvecontrol"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/boringbots/curve-control-ha-data-collection",
+  "integration_type": "service",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/boringbots/curve-control-ha-data-collection/issues",
+  "requirements": ["aiohttp>=3.8.0", "python-dateutil>=2.8.0"],
+  "version": "1.0.0"
+}
