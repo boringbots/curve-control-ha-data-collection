@@ -1,0 +1,31 @@
+# Supabase backend files (contain project secrets)
+supabase/
+supabase_*.sql
+supabase_*.py
+SUPABASE_*.md
+backend_example.py
+requirements.txt
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local configuration
+.env
+config.local.yaml

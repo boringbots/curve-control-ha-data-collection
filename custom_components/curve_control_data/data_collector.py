@@ -30,6 +30,7 @@ from .const import (
     EVENT_THERMAL_LEARNING,
     EVENT_WEATHER_UPDATE,
 )
+from .daily_aggregator import DailyDataAggregator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,27 +52,41 @@ class CurveControlDataCollector:
         
         # Data queue
         self.data_queue: deque = deque(maxlen=MAX_QUEUE_SIZE)
-        
+
+        # Daily data aggregator
+        self.daily_aggregator = DailyDataAggregator(hass, entry, anonymous_id)
+
         # State tracking
         self._state_listeners = []
         self._last_states: Dict[str, Any] = {}
+
+        # HVAC cycle tracking for daily aggregator
+        self._last_hvac_action = None
+        self._hvac_cycle_start = None
+        self._hvac_cycle_start_temp = None
         
     async def async_setup(self) -> None:
         """Set up data collection."""
+        # Set up daily aggregator
+        await self.daily_aggregator.async_setup()
+
         # Find and monitor curve control entities
         await self._setup_entity_monitoring()
-        
+
         # Listen for service calls
         self._setup_service_monitoring()
-        
+
         _LOGGER.info("Data collector setup complete - monitoring %d entities", len(self._state_listeners))
     
     async def async_cleanup(self) -> None:
         """Clean up data collection."""
+        # Clean up daily aggregator
+        await self.daily_aggregator.async_cleanup()
+
         # Remove state listeners
         for unsubscribe in self._state_listeners:
             unsubscribe()
-        
+
         # Send any remaining data
         if self.data_queue:
             await self._send_data_batch(list(self.data_queue))
@@ -164,13 +179,16 @@ class CurveControlDataCollector:
                 }
             }
             self._queue_data_point(data_point)
+
+        # Send to daily aggregator
+        self.daily_aggregator.record_temperature_data(entity_id, new_state)
     
     def _collect_hvac_data(self, entity_id: str, new_state, old_state) -> None:
         """Collect HVAC action data."""
         if self.collection_level in ["standard", "detailed"]:
             hvac_action = new_state.attributes.get("hvac_action")
             old_hvac_action = old_state.attributes.get("hvac_action") if old_state else None
-            
+
             # Only log when HVAC action changes
             if hvac_action != old_hvac_action:
                 data_point = {
@@ -187,6 +205,9 @@ class CurveControlDataCollector:
                     }
                 }
                 self._queue_data_point(data_point)
+
+                # Track HVAC cycles for daily aggregator
+                self._track_hvac_cycle(entity_id, new_state, old_state)
     
     def _collect_thermal_learning_data(self, entity_id: str, new_state, old_state) -> None:
         """Collect thermal learning data."""
@@ -197,10 +218,14 @@ class CurveControlDataCollector:
                 "entity_id": entity_id,
                 "anonymous_id": self.anonymous_id,
                 "data": {
-                    "heat_up_rate_learned": new_state.attributes.get("heat_up_rate_learned"),
-                    "cool_down_rate_learned": new_state.attributes.get("cool_down_rate_learned"),
+                    "heating_rate_learned": new_state.attributes.get("heating_rate_learned"),
+                    "cooling_rate_learned": new_state.attributes.get("cooling_rate_learned"),
+                    "natural_rate_learned": new_state.attributes.get("natural_rate_learned"),
                     "heat_up_rate_current": new_state.attributes.get("heat_up_rate_current"),
                     "cool_down_rate_current": new_state.attributes.get("cool_down_rate_current"),
+                    "heating_samples": new_state.attributes.get("heating_samples"),
+                    "cooling_samples": new_state.attributes.get("cooling_samples"),
+                    "natural_samples": new_state.attributes.get("natural_samples"),
                     "total_data_points": new_state.attributes.get("total_data_points"),
                     "has_sufficient_data": new_state.attributes.get("has_sufficient_data"),
                 }
@@ -223,6 +248,9 @@ class CurveControlDataCollector:
                 }
             }
             self._queue_data_point(data_point)
+
+        # Send to daily aggregator
+        self.daily_aggregator.record_weather_data(entity_id, new_state)
     
     def _collect_user_input_data(self, service: str, service_data: Dict[str, Any]) -> None:
         """Collect user input data."""
@@ -236,7 +264,41 @@ class CurveControlDataCollector:
             }
         }
         self._queue_data_point(data_point)
-    
+
+        # Send to daily aggregator
+        self.daily_aggregator.record_user_input(service, service_data)
+
+    def _track_hvac_cycle(self, entity_id: str, new_state, old_state) -> None:
+        """Track HVAC cycles for daily aggregation."""
+        hvac_action = new_state.attributes.get("hvac_action")
+        old_hvac_action = old_state.attributes.get("hvac_action") if old_state else None
+        current_temp = new_state.attributes.get("current_temperature")
+
+        # Handle cycle start (idle -> heating/cooling)
+        if (old_hvac_action == "idle" or old_hvac_action is None) and hvac_action in ["heating", "cooling"]:
+            self._last_hvac_action = hvac_action
+            self._hvac_cycle_start = datetime.now(timezone.utc)
+            self._hvac_cycle_start_temp = current_temp
+
+        # Handle cycle end (heating/cooling -> idle)
+        elif old_hvac_action in ["heating", "cooling"] and hvac_action == "idle":
+            if (self._hvac_cycle_start and self._hvac_cycle_start_temp is not None
+                and current_temp is not None):
+
+                # Record the completed cycle
+                self.daily_aggregator.record_hvac_cycle(
+                    action=old_hvac_action,
+                    start_time=self._hvac_cycle_start,
+                    end_time=datetime.now(timezone.utc),
+                    start_temp=self._hvac_cycle_start_temp,
+                    end_temp=current_temp
+                )
+
+            # Reset tracking
+            self._last_hvac_action = None
+            self._hvac_cycle_start = None
+            self._hvac_cycle_start_temp = None
+
     def _queue_data_point(self, data_point: Dict[str, Any]) -> None:
         """Add data point to queue."""
         self.data_queue.append(data_point)
@@ -275,7 +337,7 @@ class CurveControlDataCollector:
             }
             
             async with self.session.post(
-                f"{self.data_endpoint}/analytics/curve_control",
+                f"{self.data_endpoint}/analytics-realtime-event",
                 json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=30),

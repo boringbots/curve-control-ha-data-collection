@@ -10,7 +10,7 @@ CONF_COLLECTION_LEVEL: Final = "collection_level"
 CONF_ANONYMOUS_ID: Final = "anonymous_id"
 
 # Defaults
-DEFAULT_DATA_ENDPOINT: Final = "https://your-analytics-backend.herokuapp.com"
+DEFAULT_DATA_ENDPOINT: Final = "https://bwtakgwvkeflttjytuje.supabase.co/functions/v1"
 DEFAULT_COLLECTION_LEVEL: Final = "standard"
 
 # Collection levels
@@ -49,3 +49,4 @@ EVENT_HVAC_ACTION: Final = "hvac_action"
 EVENT_OPTIMIZATION_RESULT: Final = "optimization_result"
 EVENT_THERMAL_LEARNING: Final = "thermal_learning"
 EVENT_WEATHER_UPDATE: Final = "weather_update"
+EVENT_DAILY_SUMMARY: Final = "daily_summary"

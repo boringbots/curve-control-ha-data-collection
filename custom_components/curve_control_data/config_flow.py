@@ -48,7 +48,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         }
         
         async with session.post(
-            f"{endpoint}/analytics/curve_control/test",
+            f"{endpoint}/analytics-realtime-event",
             json=test_payload,
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=10),
