@@ -1,0 +1,9 @@
+{
+  "name": "Curve Control Data Collection",
+  "content_in_root": false,
+  "filename": "curve_control_data",
+  "render_readme": true,
+  "domains": ["sensor"],
+  "iot_class": "Cloud Polling",
+  "homeassistant": "2023.1.0"
+}
