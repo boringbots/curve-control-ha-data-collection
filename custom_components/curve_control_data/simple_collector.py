@@ -311,17 +311,105 @@ class SimpleDataCollector:
             if self.pending_readings:
                 await self._send_sensor_batch()
 
-            # Get weather forecast for tomorrow
+            # Get detailed weather forecast for the next day
             weather_forecast = None
             if self.weather_entity:
                 weather_state = self.hass.states.get(self.weather_entity)
                 if weather_state:
-                    weather_forecast = {
+                    _LOGGER.info("🌤️ Collecting detailed weather forecast data...")
+
+                    # Get current conditions
+                    current_conditions = {
                         'condition': weather_state.state,
                         'temperature': weather_state.attributes.get('temperature'),
                         'humidity': weather_state.attributes.get('humidity'),
-                        'forecast': weather_state.attributes.get('forecast', [])[:5]  # Next 5 periods
+                        'pressure': weather_state.attributes.get('pressure'),
+                        'wind_speed': weather_state.attributes.get('wind_speed'),
+                        'wind_bearing': weather_state.attributes.get('wind_bearing'),
+                        'visibility': weather_state.attributes.get('visibility')
                     }
+
+                    # Get forecast data
+                    raw_forecast = weather_state.attributes.get('forecast', [])
+                    _LOGGER.info(f"  Raw forecast contains {len(raw_forecast)} periods")
+
+                    # Process forecast data
+                    tomorrow_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+                    next_48h_date = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
+                    hourly_forecast = []
+                    daily_forecast = []
+
+                    for forecast_item in raw_forecast:
+                        if isinstance(forecast_item, dict):
+                            forecast_time = forecast_item.get('datetime')
+                            if forecast_time:
+                                forecast_time_str = str(forecast_time)
+
+                                # Extract forecast data
+                                forecast_data = {
+                                    'datetime': forecast_time,
+                                    'condition': forecast_item.get('condition'),
+                                    'temperature': forecast_item.get('temperature'),
+                                    'templow': forecast_item.get('templow'),
+                                    'humidity': forecast_item.get('humidity'),
+                                    'pressure': forecast_item.get('pressure'),
+                                    'wind_speed': forecast_item.get('wind_speed'),
+                                    'wind_bearing': forecast_item.get('wind_bearing'),
+                                    'precipitation': forecast_item.get('precipitation'),
+                                    'precipitation_probability': forecast_item.get('precipitation_probability')
+                                }
+
+                                # Check if this is for tomorrow or next 48 hours
+                                if tomorrow_date in forecast_time_str or next_48h_date in forecast_time_str:
+                                    # Determine if this is hourly or daily data based on datetime format
+                                    if 'T' in forecast_time_str and len(forecast_time_str) > 10:
+                                        # This looks like hourly data (has time component)
+                                        hourly_forecast.append(forecast_data)
+                                    else:
+                                        # This looks like daily data
+                                        daily_forecast.append(forecast_data)
+                                elif len(daily_forecast) < 3:
+                                    # Keep first few daily forecasts regardless of date
+                                    if 'T' not in forecast_time_str or len(forecast_time_str) <= 10:
+                                        daily_forecast.append(forecast_data)
+
+                    # Limit forecasts and sort by datetime
+                    hourly_forecast = sorted(hourly_forecast, key=lambda x: x['datetime'])[:24]
+                    daily_forecast = sorted(daily_forecast, key=lambda x: x['datetime'])[:5]
+
+                    # If we don't have hourly data, create pseudo-hourly from daily
+                    if not hourly_forecast and daily_forecast:
+                        _LOGGER.info("  📅 No hourly data available, creating hourly estimates from daily data")
+                        for daily_item in daily_forecast[:2]:  # Use next 2 days
+                            # Create 24 hourly entries from daily data
+                            base_date = daily_item['datetime']
+                            if isinstance(base_date, str):
+                                try:
+                                    base_date = datetime.fromisoformat(base_date.replace('Z', '+00:00'))
+                                except:
+                                    continue
+
+                            for hour in range(24):
+                                hourly_item = daily_item.copy()
+                                hourly_item['datetime'] = (base_date + timedelta(hours=hour)).isoformat()
+                                hourly_item['estimated'] = True  # Mark as estimated
+                                hourly_forecast.append(hourly_item)
+
+                        hourly_forecast = hourly_forecast[:24]  # Limit to 24 hours
+
+                    weather_forecast = {
+                        'current_conditions': current_conditions,
+                        'hourly_forecast': hourly_forecast,
+                        'daily_forecast': daily_forecast,
+                        'forecast_updated': datetime.now().isoformat(),
+                        'entity_id': self.weather_entity
+                    }
+
+                    _LOGGER.info(f"  ✅ Collected weather data: {len(hourly_forecast)} hourly + {len(daily_forecast)} daily forecasts")
+                else:
+                    _LOGGER.warning("  ❌ Weather entity not found")
+            else:
+                _LOGGER.info("  ⚠️ No weather entity configured")
 
             # Prepare user inputs (services called today)
             user_inputs = {
@@ -453,7 +541,13 @@ class SimpleDataCollector:
         # Check weather entity (optional)
         if self.weather_entity:
             weather_state = self.hass.states.get(self.weather_entity)
-            status['weather'] = f"{weather_state.state}" if weather_state else "Entity not found"
+            if weather_state:
+                forecast_data = weather_state.attributes.get('forecast', [])
+                temp = weather_state.attributes.get('temperature', 'unknown')
+                humidity = weather_state.attributes.get('humidity', 'unknown')
+                status['weather'] = f"{weather_state.state}, {temp}°F, {humidity}% humidity, {len(forecast_data)} forecast periods"
+            else:
+                status['weather'] = "Entity not found"
         else:
             status['weather'] = "Not configured"
 
