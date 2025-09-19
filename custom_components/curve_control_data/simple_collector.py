@@ -130,18 +130,87 @@ class SimpleDataCollector:
             else:
                 _LOGGER.info("  Humidity entity: Not configured")
 
-            # Get HVAC action from climate entity
-            hvac_action = hvac_state.attributes.get('hvac_action', 'off').upper()
-            _LOGGER.info(f"  Raw HVAC action: {hvac_action}")
+            # Get HVAC state - handle different entity types
+            _LOGGER.info(f"  HVAC entity state: {hvac_state.state}")
+            _LOGGER.info(f"  HVAC entity attributes: {hvac_state.attributes}")
+            _LOGGER.info(f"  HVAC entity domain: {hvac_state.domain}")
+
+            # Determine HVAC state based on entity type
+            hvac_action = None
+
+            if hvac_state.domain == 'climate':
+                # Method 1: Check hvac_action attribute (most reliable for climate entities)
+                if 'hvac_action' in hvac_state.attributes:
+                    hvac_action = hvac_state.attributes.get('hvac_action', '').upper()
+                    _LOGGER.info(f"  Found hvac_action attribute: {hvac_action}")
+
+                # Method 2: Check hvac_mode or the state itself
+                if not hvac_action or hvac_action in ['OFF', 'IDLE', 'FAN']:
+                    hvac_mode = hvac_state.attributes.get('hvac_mode', hvac_state.state).upper()
+                    _LOGGER.info(f"  Checking hvac_mode/state: {hvac_mode}")
+                    if hvac_mode in ['HEAT', 'HEATING']:
+                        hvac_action = 'HEATING'
+                    elif hvac_mode in ['COOL', 'COOLING']:
+                        hvac_action = 'COOLING'
+                    elif hvac_mode in ['AUTO']:
+                        # For auto mode, we need to determine what it's actually doing
+                        current_temp = temp_state.state if temp_state else None
+                        target_temp = hvac_state.attributes.get('temperature')
+                        if current_temp and target_temp:
+                            try:
+                                temp_diff = float(target_temp) - float(current_temp)
+                                if temp_diff > 0.5:  # Need heating
+                                    hvac_action = 'HEATING'
+                                elif temp_diff < -0.5:  # Need cooling
+                                    hvac_action = 'COOLING'
+                                else:
+                                    hvac_action = 'OFF'
+                                _LOGGER.info(f"  Auto mode inference: temp_diff={temp_diff:.1f}°F -> {hvac_action}")
+                            except (ValueError, TypeError):
+                                hvac_action = 'OFF'
+                    else:
+                        hvac_action = 'OFF'
+
+            elif hvac_state.domain == 'sensor':
+                # For sensor entities, use the state directly
+                sensor_value = hvac_state.state.upper()
+                _LOGGER.info(f"  Sensor value: {sensor_value}")
+                if sensor_value in ['HEAT', 'HEATING', '1', 'ON'] and 'heat' in hvac_state.entity_id.lower():
+                    hvac_action = 'HEATING'
+                elif sensor_value in ['COOL', 'COOLING', '1', 'ON'] and 'cool' in hvac_state.entity_id.lower():
+                    hvac_action = 'COOLING'
+                elif sensor_value in ['HEAT', 'HEATING']:
+                    hvac_action = 'HEATING'
+                elif sensor_value in ['COOL', 'COOLING']:
+                    hvac_action = 'COOLING'
+                else:
+                    hvac_action = 'OFF'
+
+            elif hvac_state.domain == 'binary_sensor':
+                # For binary sensors, check if it's on/off and infer from entity name
+                sensor_state = hvac_state.state.lower()
+                entity_name = hvac_state.entity_id.lower()
+                _LOGGER.info(f"  Binary sensor state: {sensor_state}, entity: {entity_name}")
+
+                if sensor_state == 'on':
+                    if 'heat' in entity_name or 'heating' in entity_name:
+                        hvac_action = 'HEATING'
+                    elif 'cool' in entity_name or 'cooling' in entity_name or 'ac' in entity_name:
+                        hvac_action = 'COOLING'
+                    else:
+                        hvac_action = 'HEATING'  # Default assumption for generic binary sensor
+                else:
+                    hvac_action = 'OFF'
 
             # Map Home Assistant actions to our expected values
-            if hvac_action in ['HEATING']:
-                hvac_action = 'HEAT'
-            elif hvac_action in ['COOLING']:
-                hvac_action = 'COOL'
+            if hvac_action in ['HEATING', 'HEAT']:
+                final_hvac_action = 'HEAT'
+            elif hvac_action in ['COOLING', 'COOL']:
+                final_hvac_action = 'COOL'
             else:
-                hvac_action = 'OFF'
-            _LOGGER.info(f"  Mapped HVAC action: {hvac_action}")
+                final_hvac_action = 'OFF'
+
+            _LOGGER.info(f"  Final HVAC action: {final_hvac_action}")
 
             try:
                 indoor_temp = float(temp_state.state)
@@ -156,7 +225,7 @@ class SimpleDataCollector:
                 'timestamp': current_time.isoformat(),
                 'indoor_temp': indoor_temp,
                 'indoor_humidity': humidity,
-                'hvac_state': hvac_action,
+                'hvac_state': final_hvac_action,
                 'target_temp': target_temp
             }
 
@@ -354,10 +423,16 @@ class SimpleDataCollector:
         else:
             status['temperature'] = "Not configured"
 
-        # Check HVAC entity
+        # Check HVAC entity (can be climate, sensor, or binary_sensor)
         if self.hvac_entity:
             hvac_state = self.hass.states.get(self.hvac_entity)
-            status['hvac'] = f"{hvac_state.state} (action: {hvac_state.attributes.get('hvac_action', 'unknown')})" if hvac_state else "Entity not found"
+            if hvac_state:
+                if hvac_state.domain == 'climate':
+                    status['hvac'] = f"{hvac_state.state} (action: {hvac_state.attributes.get('hvac_action', 'unknown')})"
+                else:
+                    status['hvac'] = f"{hvac_state.domain}: {hvac_state.state}"
+            else:
+                status['hvac'] = "Entity not found"
         else:
             status['hvac'] = "Not configured"
 

@@ -97,7 +97,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     selector.EntitySelectorConfig(domain="sensor")
                 ),
                 vol.Required("hvac_entity"): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="climate")
+                    selector.EntitySelectorConfig(domain=["climate", "sensor", "binary_sensor"])
                 ),
                 vol.Required("thermostat_entity"): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="climate")
