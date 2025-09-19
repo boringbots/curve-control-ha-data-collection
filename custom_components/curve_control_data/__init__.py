@@ -33,17 +33,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         anonymous_id = entry.data[CONF_ANONYMOUS_ID]
 
+    # Log configuration details
+    _LOGGER.info("🔧 Creating data collector with configuration:")
+    _LOGGER.info(f"  Temperature entity: {entry.data.get('temperature_entity')}")
+    _LOGGER.info(f"  HVAC entity: {entry.data.get('hvac_entity')}")
+    _LOGGER.info(f"  Thermostat entity: {entry.data.get('thermostat_entity')}")
+    _LOGGER.info(f"  Humidity entity: {entry.data.get('humidity_entity')}")
+    _LOGGER.info(f"  Weather entity: {entry.data.get('weather_entity')}")
+
     # Create simple data collector
-    collector = SimpleDataCollector(
-        hass=hass,
-        anonymous_id=anonymous_id,
-        temperature_entity=entry.data.get('temperature_entity'),
-        hvac_entity=entry.data.get('hvac_entity'),
-        thermostat_entity=entry.data.get('thermostat_entity'),
-        humidity_entity=entry.data.get('humidity_entity'),
-        weather_entity=entry.data.get('weather_entity')
-    )
-    await collector.async_start()
+    try:
+        collector = SimpleDataCollector(
+            hass=hass,
+            anonymous_id=anonymous_id,
+            temperature_entity=entry.data.get('temperature_entity'),
+            hvac_entity=entry.data.get('hvac_entity'),
+            thermostat_entity=entry.data.get('thermostat_entity'),
+            humidity_entity=entry.data.get('humidity_entity'),
+            weather_entity=entry.data.get('weather_entity')
+        )
+        await collector.async_start()
+        _LOGGER.info("✅ Data collector created and started successfully")
+    except Exception as e:
+        _LOGGER.error(f"❌ Failed to create or start data collector: {e}")
+        raise
 
     # Store collector
     hass.data[DOMAIN][entry.entry_id] = {
@@ -52,9 +65,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     # Register services
-    await _async_register_services(hass, collector)
+    try:
+        await _async_register_services(hass, collector)
+        _LOGGER.info("✅ Services registered successfully")
+    except Exception as e:
+        _LOGGER.error(f"❌ Failed to register services: {e}")
 
-    _LOGGER.info("Curve Control Data Collection initialized with anonymous ID: %s", anonymous_id[:8] + "...")
+    _LOGGER.info("✅ Curve Control Data Collection initialized with anonymous ID: %s", anonymous_id[:8] + "...")
+    _LOGGER.info("✅ Integration is ready for data collection and manual testing")
 
     return True
 
@@ -86,17 +104,20 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def _async_register_services(hass: HomeAssistant, collector: SimpleDataCollector):
     """Register services for the integration."""
+    _LOGGER.info("🔧 Registering services for Curve Control Data Collection...")
 
     async def handle_manual_reading(call):
         """Handle manual reading service call."""
+        _LOGGER.info("🔥 Manual reading service called!")
         try:
             await collector.trigger_manual_reading()
-            _LOGGER.info("Manual sensor reading triggered")
+            _LOGGER.info("✅ Manual sensor reading triggered successfully")
         except Exception as e:
-            _LOGGER.error(f"Error triggering manual reading: {e}")
+            _LOGGER.error(f"❌ Error triggering manual reading: {e}")
 
     async def handle_get_sensor_status(call):
         """Handle get sensor status service call."""
+        _LOGGER.info("📊 Sensor status service called!")
         try:
             status = collector.get_sensor_status()
             stats = collector.get_collection_stats()
@@ -110,17 +131,25 @@ async def _async_register_services(hass: HomeAssistant, collector: SimpleDataCol
                 _LOGGER.info(f"  {stat}: {value}")
 
         except Exception as e:
-            _LOGGER.error(f"Error getting sensor status: {e}")
+            _LOGGER.error(f"❌ Error getting sensor status: {e}")
 
-    # Register services
-    hass.services.async_register(
-        DOMAIN,
-        "trigger_manual_reading",
-        handle_manual_reading
-    )
+    # Register services only if they don't already exist
+    if not hass.services.has_service(DOMAIN, "trigger_manual_reading"):
+        hass.services.async_register(
+            DOMAIN,
+            "trigger_manual_reading",
+            handle_manual_reading
+        )
+        _LOGGER.info("✅ Registered service: curve_control_data.trigger_manual_reading")
+    else:
+        _LOGGER.info("⚠️ Service trigger_manual_reading already exists")
 
-    hass.services.async_register(
-        DOMAIN,
-        "get_sensor_status",
-        handle_get_sensor_status
-    )
+    if not hass.services.has_service(DOMAIN, "get_sensor_status"):
+        hass.services.async_register(
+            DOMAIN,
+            "get_sensor_status",
+            handle_get_sensor_status
+        )
+        _LOGGER.info("✅ Registered service: curve_control_data.get_sensor_status")
+    else:
+        _LOGGER.info("⚠️ Service get_sensor_status already exists")
