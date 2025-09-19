@@ -131,45 +131,80 @@ class SimpleDataCollector:
                 _LOGGER.info("  Humidity entity: Not configured")
 
             # Get HVAC state - handle different entity types
-            _LOGGER.info(f"  HVAC entity state: {hvac_state.state}")
-            _LOGGER.info(f"  HVAC entity attributes: {hvac_state.attributes}")
-            _LOGGER.info(f"  HVAC entity domain: {hvac_state.domain}")
+            _LOGGER.info(f"🔥 DETAILED HVAC ENTITY DEBUGGING:")
+            _LOGGER.info(f"  Entity ID: {hvac_state.entity_id}")
+            _LOGGER.info(f"  Domain: {hvac_state.domain}")
+            _LOGGER.info(f"  State: '{hvac_state.state}'")
+            _LOGGER.info(f"  All Attributes: {dict(hvac_state.attributes)}")
+
+            # Show specific attributes we're looking for
+            _LOGGER.info(f"  hvac_action attribute: {hvac_state.attributes.get('hvac_action', 'NOT FOUND')}")
+            _LOGGER.info(f"  hvac_mode attribute: {hvac_state.attributes.get('hvac_mode', 'NOT FOUND')}")
+            _LOGGER.info(f"  current_temperature: {hvac_state.attributes.get('current_temperature', 'NOT FOUND')}")
+            _LOGGER.info(f"  temperature: {hvac_state.attributes.get('temperature', 'NOT FOUND')}")
 
             # Determine HVAC state based on entity type
             hvac_action = None
 
             if hvac_state.domain == 'climate':
+                _LOGGER.info(f"  🌡️ Processing CLIMATE entity...")
+
                 # Method 1: Check hvac_action attribute (most reliable for climate entities)
                 if 'hvac_action' in hvac_state.attributes:
                     hvac_action = hvac_state.attributes.get('hvac_action', '').upper()
-                    _LOGGER.info(f"  Found hvac_action attribute: {hvac_action}")
+                    _LOGGER.info(f"  ✅ Found hvac_action attribute: '{hvac_action}'")
+                else:
+                    _LOGGER.info(f"  ❌ No hvac_action attribute found")
 
                 # Method 2: Check hvac_mode or the state itself
-                if not hvac_action or hvac_action in ['OFF', 'IDLE', 'FAN']:
-                    hvac_mode = hvac_state.attributes.get('hvac_mode', hvac_state.state).upper()
-                    _LOGGER.info(f"  Checking hvac_mode/state: {hvac_mode}")
-                    if hvac_mode in ['HEAT', 'HEATING']:
+                if not hvac_action or hvac_action in ['OFF', 'IDLE', 'FAN', '']:
+                    _LOGGER.info(f"  🔄 Checking fallback methods (hvac_action was: '{hvac_action}')")
+                    hvac_mode = hvac_state.attributes.get('hvac_mode', hvac_state.state)
+                    _LOGGER.info(f"  hvac_mode attribute: '{hvac_mode}'")
+                    _LOGGER.info(f"  entity state: '{hvac_state.state}'")
+
+                    hvac_mode_upper = str(hvac_mode).upper()
+                    state_upper = str(hvac_state.state).upper()
+
+                    _LOGGER.info(f"  Checking hvac_mode/state: '{hvac_mode_upper}' / '{state_upper}'")
+
+                    if hvac_mode_upper in ['HEAT', 'HEATING'] or state_upper in ['HEAT', 'HEATING']:
                         hvac_action = 'HEATING'
-                    elif hvac_mode in ['COOL', 'COOLING']:
+                        _LOGGER.info(f"  🔥 Detected HEATING mode")
+                    elif hvac_mode_upper in ['COOL', 'COOLING'] or state_upper in ['COOL', 'COOLING']:
                         hvac_action = 'COOLING'
-                    elif hvac_mode in ['AUTO']:
+                        _LOGGER.info(f"  ❄️ Detected COOLING mode")
+                    elif hvac_mode_upper in ['AUTO'] or state_upper in ['AUTO']:
+                        _LOGGER.info(f"  🤖 Auto mode detected, inferring from temperature difference...")
                         # For auto mode, we need to determine what it's actually doing
                         current_temp = temp_state.state if temp_state else None
                         target_temp = hvac_state.attributes.get('temperature')
+                        _LOGGER.info(f"  Current temp: {current_temp}, Target temp: {target_temp}")
+
                         if current_temp and target_temp:
                             try:
                                 temp_diff = float(target_temp) - float(current_temp)
+                                _LOGGER.info(f"  Temperature difference: {temp_diff:.1f}°F")
                                 if temp_diff > 0.5:  # Need heating
                                     hvac_action = 'HEATING'
+                                    _LOGGER.info(f"  🔥 Auto mode: Need heating (target is higher)")
                                 elif temp_diff < -0.5:  # Need cooling
                                     hvac_action = 'COOLING'
+                                    _LOGGER.info(f"  ❄️ Auto mode: Need cooling (target is lower)")
                                 else:
                                     hvac_action = 'OFF'
-                                _LOGGER.info(f"  Auto mode inference: temp_diff={temp_diff:.1f}°F -> {hvac_action}")
-                            except (ValueError, TypeError):
+                                    _LOGGER.info(f"  😴 Auto mode: At target temperature")
+                            except (ValueError, TypeError) as e:
                                 hvac_action = 'OFF'
+                                _LOGGER.error(f"  ❌ Error converting temperatures: {e}")
+                        else:
+                            hvac_action = 'OFF'
+                            _LOGGER.warning(f"  ⚠️ Missing temperature data for auto mode")
                     else:
                         hvac_action = 'OFF'
+                        _LOGGER.info(f"  😴 Detected OFF mode or unknown mode")
+                else:
+                    _LOGGER.info(f"  ✅ Using hvac_action: '{hvac_action}'")
 
             elif hvac_state.domain == 'sensor':
                 # For sensor entities, use the state directly
@@ -203,14 +238,20 @@ class SimpleDataCollector:
                     hvac_action = 'OFF'
 
             # Map Home Assistant actions to our expected values
+            _LOGGER.info(f"🎯 FINAL HVAC STATE MAPPING:")
+            _LOGGER.info(f"  Detected hvac_action: '{hvac_action}'")
+
             if hvac_action in ['HEATING', 'HEAT']:
                 final_hvac_action = 'HEAT'
+                _LOGGER.info(f"  ✅ Mapped to: HEAT")
             elif hvac_action in ['COOLING', 'COOL']:
                 final_hvac_action = 'COOL'
+                _LOGGER.info(f"  ✅ Mapped to: COOL")
             else:
                 final_hvac_action = 'OFF'
+                _LOGGER.info(f"  ✅ Mapped to: OFF (default for '{hvac_action}')")
 
-            _LOGGER.info(f"  Final HVAC action: {final_hvac_action}")
+            _LOGGER.info(f"🎯 FINAL RESULT: HVAC state = '{final_hvac_action}'")
 
             try:
                 indoor_temp = float(temp_state.state)
