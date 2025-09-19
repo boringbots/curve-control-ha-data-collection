@@ -156,28 +156,33 @@ class SimpleDataCollector:
                 else:
                     _LOGGER.info(f"  ❌ No hvac_action attribute found")
 
-                # Method 2: Check hvac_mode or the state itself
+                # Method 2: Check hvac_mode, hvac_modes, or the state itself
                 if not hvac_action or hvac_action in ['OFF', 'IDLE', 'FAN', '']:
                     _LOGGER.info(f"  🔄 Checking fallback methods (hvac_action was: '{hvac_action}')")
-                    hvac_mode = hvac_state.attributes.get('hvac_mode', hvac_state.state)
+
+                    # Try different attribute names
+                    hvac_mode = hvac_state.attributes.get('hvac_mode')  # Standard attribute
+                    hvac_modes = hvac_state.attributes.get('hvac_modes')  # Sometimes it's plural
+                    current_state = hvac_state.state
+
                     _LOGGER.info(f"  hvac_mode attribute: '{hvac_mode}'")
-                    _LOGGER.info(f"  entity state: '{hvac_state.state}'")
+                    _LOGGER.info(f"  hvac_modes attribute: '{hvac_modes}'")
+                    _LOGGER.info(f"  entity state: '{current_state}'")
 
-                    hvac_mode_upper = str(hvac_mode).upper()
-                    state_upper = str(hvac_state.state).upper()
+                    # Use the state as the current mode (this is usually what we want)
+                    current_mode = str(current_state).upper()
+                    _LOGGER.info(f"  Using current state as mode: '{current_mode}'")
 
-                    _LOGGER.info(f"  Checking hvac_mode/state: '{hvac_mode_upper}' / '{state_upper}'")
-
-                    if hvac_mode_upper in ['HEAT', 'HEATING'] or state_upper in ['HEAT', 'HEATING']:
+                    if current_mode in ['HEAT', 'HEATING']:
                         hvac_action = 'HEATING'
-                        _LOGGER.info(f"  🔥 Detected HEATING mode")
-                    elif hvac_mode_upper in ['COOL', 'COOLING'] or state_upper in ['COOL', 'COOLING']:
+                        _LOGGER.info(f"  🔥 Detected HEATING mode from state")
+                    elif current_mode in ['COOL', 'COOLING']:
                         hvac_action = 'COOLING'
-                        _LOGGER.info(f"  ❄️ Detected COOLING mode")
-                    elif hvac_mode_upper in ['AUTO'] or state_upper in ['AUTO']:
+                        _LOGGER.info(f"  ❄️ Detected COOLING mode from state")
+                    elif current_mode in ['AUTO']:
                         _LOGGER.info(f"  🤖 Auto mode detected, inferring from temperature difference...")
                         # For auto mode, we need to determine what it's actually doing
-                        current_temp = temp_state.state if temp_state else None
+                        current_temp = hvac_state.attributes.get('current_temperature')
                         target_temp = hvac_state.attributes.get('temperature')
                         _LOGGER.info(f"  Current temp: {current_temp}, Target temp: {target_temp}")
 
@@ -185,24 +190,30 @@ class SimpleDataCollector:
                             try:
                                 temp_diff = float(target_temp) - float(current_temp)
                                 _LOGGER.info(f"  Temperature difference: {temp_diff:.1f}°F")
-                                if temp_diff > 0.5:  # Need heating
+                                if temp_diff > 1.0:  # Need heating (increased threshold)
                                     hvac_action = 'HEATING'
-                                    _LOGGER.info(f"  🔥 Auto mode: Need heating (target is higher)")
-                                elif temp_diff < -0.5:  # Need cooling
+                                    _LOGGER.info(f"  🔥 Auto mode: Need heating (target is {temp_diff:.1f}°F higher)")
+                                elif temp_diff < -1.0:  # Need cooling (increased threshold)
                                     hvac_action = 'COOLING'
-                                    _LOGGER.info(f"  ❄️ Auto mode: Need cooling (target is lower)")
+                                    _LOGGER.info(f"  ❄️ Auto mode: Need cooling (target is {abs(temp_diff):.1f}°F lower)")
                                 else:
                                     hvac_action = 'OFF'
-                                    _LOGGER.info(f"  😴 Auto mode: At target temperature")
+                                    _LOGGER.info(f"  😴 Auto mode: At target temperature (diff: {temp_diff:.1f}°F)")
                             except (ValueError, TypeError) as e:
                                 hvac_action = 'OFF'
                                 _LOGGER.error(f"  ❌ Error converting temperatures: {e}")
                         else:
                             hvac_action = 'OFF'
                             _LOGGER.warning(f"  ⚠️ Missing temperature data for auto mode")
+                    elif current_mode in ['OFF']:
+                        hvac_action = 'OFF'
+                        _LOGGER.info(f"  😴 Detected OFF mode from state")
+                    elif current_mode in ['FAN_ONLY', 'FAN']:
+                        hvac_action = 'OFF'
+                        _LOGGER.info(f"  🌀 Detected FAN_ONLY mode - treating as OFF")
                     else:
                         hvac_action = 'OFF'
-                        _LOGGER.info(f"  😴 Detected OFF mode or unknown mode")
+                        _LOGGER.info(f"  😴 Unknown mode '{current_mode}' - defaulting to OFF")
                 else:
                     _LOGGER.info(f"  ✅ Using hvac_action: '{hvac_action}'")
 
