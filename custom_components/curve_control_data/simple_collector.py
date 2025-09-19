@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_interval, async_track_time_change
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DEFAULT_DATA_ENDPOINT
+from .const import DEFAULT_DATA_ENDPOINT, SUPABASE_ANON_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,13 +46,14 @@ class SimpleDataCollector:
 
     async def async_start(self):
         """Start the data collection."""
-        _LOGGER.info("Starting simple data collection")
+        _LOGGER.info("Starting curve control data collection")
 
-        # Collect readings every 5 minutes
-        self._unsub_5min = async_track_time_interval(
+        # Collect readings at specific clock times: :00, :05, :10, :15, :20, :25, :30, :35, :40, :45, :50, :55
+        self._unsub_5min = async_track_time_change(
             self.hass,
             self._collect_reading,
-            timedelta(minutes=5)
+            minute=[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55],
+            second=0
         )
 
         # Send daily summary at midnight
@@ -63,6 +64,9 @@ class SimpleDataCollector:
             minute=5,  # 5 minutes after midnight to ensure day rollover
             second=0
         )
+
+        _LOGGER.info("Scheduled collection every 5 minutes on the clock (:00, :05, :10, etc.)")
+        _LOGGER.info("Scheduled daily summary at midnight")
 
         # Collect initial reading
         await self._collect_reading(None)
@@ -77,27 +81,42 @@ class SimpleDataCollector:
     async def _collect_reading(self, _):
         """Collect a single sensor reading."""
         try:
+            _LOGGER.info("=== CURVE CONTROL SENSOR COLLECTION DEBUG ===")
+            current_time = datetime.now()
+            _LOGGER.info(f"Collection time: {current_time.strftime('%H:%M:%S')}")
+
             # Get current sensor values
             temp_state = self.hass.states.get(self.temperature_entity)
             hvac_state = self.hass.states.get(self.hvac_entity)
             thermostat_state = self.hass.states.get(self.thermostat_entity)
 
+            _LOGGER.info(f"Checking required entities:")
+            _LOGGER.info(f"  Temperature entity: {self.temperature_entity} -> {temp_state.state if temp_state else 'NOT FOUND'}")
+            _LOGGER.info(f"  HVAC entity: {self.hvac_entity} -> {hvac_state.state if hvac_state else 'NOT FOUND'}")
+            _LOGGER.info(f"  Thermostat entity: {self.thermostat_entity} -> {thermostat_state.state if thermostat_state else 'NOT FOUND'}")
+
             if not temp_state or not hvac_state or not thermostat_state:
-                _LOGGER.warning("Missing required sensor states")
+                _LOGGER.error("❌ Missing required sensor states - cannot collect reading")
                 return
 
             # Get humidity if available
             humidity = None
             if self.humidity_entity:
                 humidity_state = self.hass.states.get(self.humidity_entity)
+                _LOGGER.info(f"  Humidity entity: {self.humidity_entity} -> {humidity_state.state if humidity_state else 'NOT FOUND'}")
                 if humidity_state and humidity_state.state not in ['unknown', 'unavailable']:
                     try:
                         humidity = float(humidity_state.state)
-                    except (ValueError, TypeError):
-                        pass
+                        _LOGGER.info(f"  ✅ Humidity value: {humidity}")
+                    except (ValueError, TypeError) as e:
+                        _LOGGER.warning(f"  ⚠️ Could not convert humidity '{humidity_state.state}' to float: {e}")
+            else:
+                _LOGGER.info("  Humidity entity: Not configured")
 
             # Get HVAC action from climate entity
             hvac_action = hvac_state.attributes.get('hvac_action', 'off').upper()
+            _LOGGER.info(f"  Raw HVAC action: {hvac_action}")
+
             # Map Home Assistant actions to our expected values
             if hvac_action in ['HEATING']:
                 hvac_action = 'HEAT'
@@ -105,21 +124,40 @@ class SimpleDataCollector:
                 hvac_action = 'COOL'
             else:
                 hvac_action = 'OFF'
+            _LOGGER.info(f"  Mapped HVAC action: {hvac_action}")
+
+            try:
+                indoor_temp = float(temp_state.state)
+                target_temp = float(thermostat_state.attributes.get('temperature', 0))
+                _LOGGER.info(f"  ✅ Temperature values: indoor={indoor_temp}, target={target_temp}")
+            except (ValueError, TypeError) as e:
+                _LOGGER.error(f"  ❌ Could not convert temperature values to float: {e}")
+                return
 
             # Create reading
             reading = {
-                'timestamp': datetime.now().isoformat(),
-                'indoor_temp': float(temp_state.state),
+                'timestamp': current_time.isoformat(),
+                'indoor_temp': indoor_temp,
                 'indoor_humidity': humidity,
                 'hvac_state': hvac_action,
-                'target_temp': float(thermostat_state.attributes.get('temperature', 0))
+                'target_temp': target_temp
             }
 
             self.pending_readings.append(reading)
+            _LOGGER.info(f"✅ Collected reading: {reading}")
+            _LOGGER.info(f"Pending readings: {len(self.pending_readings)} (will send at top of hour)")
 
-            # Send readings in batches of 12 (1 hour worth)
-            if len(self.pending_readings) >= 12:
+            # For manual triggers, send immediately for testing
+            if hasattr(self, '_manual_trigger') and self._manual_trigger:
+                _LOGGER.info("Manual trigger - sending reading immediately for testing...")
                 await self._send_sensor_batch()
+                self._manual_trigger = False
+            # Send readings in batches of 12 (1 hour worth) - but only for automatic collection
+            elif len(self.pending_readings) >= 12:
+                _LOGGER.info("Batch of 12 readings collected - sending now...")
+                await self._send_sensor_batch()
+
+            _LOGGER.info("=== END CURVE CONTROL SENSOR COLLECTION DEBUG ===")
 
         except Exception as e:
             _LOGGER.error(f"Error collecting sensor reading: {e}")
@@ -127,6 +165,7 @@ class SimpleDataCollector:
     async def _send_sensor_batch(self):
         """Send a batch of sensor readings."""
         if not self.pending_readings:
+            _LOGGER.info("No pending readings to send")
             return
 
         try:
@@ -137,19 +176,39 @@ class SimpleDataCollector:
                 'readings': self.pending_readings
             }
 
+            # Add authentication headers for Supabase
+            headers = {
+                'Authorization': f'Bearer {SUPABASE_ANON_KEY}',
+                'apikey': SUPABASE_ANON_KEY,
+                'Content-Type': 'application/json'
+            }
+
+            _LOGGER.info(f"Sending {len(self.pending_readings)} readings to {self.data_endpoint}/sensor-data")
+            _LOGGER.debug(f"Payload: {payload}")
+
             async with session.post(
                 f"{self.data_endpoint}/sensor-data",
                 json=payload,
+                headers=headers,
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
                 if response.status == 200:
-                    _LOGGER.debug(f"Sent {len(self.pending_readings)} sensor readings")
+                    result = await response.json()
+                    _LOGGER.info(
+                        f"✅ Successfully sent {len(self.pending_readings)} sensor readings. "
+                        f"Server response: {result.get('message', 'Success')}"
+                    )
                     self.pending_readings.clear()
                 else:
-                    _LOGGER.error(f"Failed to send sensor readings: {response.status}")
+                    error_text = await response.text()
+                    _LOGGER.error(f"❌ Failed to send sensor readings: {response.status} - {error_text}")
 
+        except asyncio.TimeoutError:
+            _LOGGER.error("❌ Timeout sending sensor readings to server")
+        except aiohttp.ClientError as e:
+            _LOGGER.error(f"❌ Network error sending sensor readings: {e}")
         except Exception as e:
-            _LOGGER.error(f"Error sending sensor readings: {e}")
+            _LOGGER.error(f"❌ Unexpected error sending sensor readings: {e}")
 
     async def _send_daily_summary(self, _):
         """Send daily summary at midnight."""
@@ -186,9 +245,17 @@ class SimpleDataCollector:
                 'weather_forecast': weather_forecast
             }
 
+            # Add authentication headers for Supabase
+            headers = {
+                'Authorization': f'Bearer {SUPABASE_ANON_KEY}',
+                'apikey': SUPABASE_ANON_KEY,
+                'Content-Type': 'application/json'
+            }
+
             async with session.post(
                 f"{self.data_endpoint}/daily-summary",
                 json=payload,
+                headers=headers,
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
                 if response.status == 200:
@@ -244,3 +311,61 @@ class SimpleDataCollector:
             'service': service,
             'data': data
         })
+
+    async def trigger_manual_reading(self):
+        """Trigger a manual reading (for testing or user request)."""
+        _LOGGER.info("Triggering manual sensor reading")
+        self._manual_trigger = True  # Flag to send immediately after collection
+        await self._collect_reading(None)
+
+    def get_sensor_status(self) -> Dict[str, str]:
+        """Get status of all configured sensors."""
+        status = {}
+
+        # Check temperature entity
+        if self.temperature_entity:
+            temp_state = self.hass.states.get(self.temperature_entity)
+            status['temperature'] = f"{temp_state.state} {temp_state.attributes.get('unit_of_measurement', '')}".strip() if temp_state else "Entity not found"
+        else:
+            status['temperature'] = "Not configured"
+
+        # Check HVAC entity
+        if self.hvac_entity:
+            hvac_state = self.hass.states.get(self.hvac_entity)
+            status['hvac'] = f"{hvac_state.state} (action: {hvac_state.attributes.get('hvac_action', 'unknown')})" if hvac_state else "Entity not found"
+        else:
+            status['hvac'] = "Not configured"
+
+        # Check thermostat entity
+        if self.thermostat_entity:
+            thermo_state = self.hass.states.get(self.thermostat_entity)
+            status['thermostat'] = f"{thermo_state.state} (target: {thermo_state.attributes.get('temperature', 'unknown')})" if thermo_state else "Entity not found"
+        else:
+            status['thermostat'] = "Not configured"
+
+        # Check humidity entity (optional)
+        if self.humidity_entity:
+            humidity_state = self.hass.states.get(self.humidity_entity)
+            status['humidity'] = f"{humidity_state.state} {humidity_state.attributes.get('unit_of_measurement', '')}".strip() if humidity_state else "Entity not found"
+        else:
+            status['humidity'] = "Not configured"
+
+        # Check weather entity (optional)
+        if self.weather_entity:
+            weather_state = self.hass.states.get(self.weather_entity)
+            status['weather'] = f"{weather_state.state}" if weather_state else "Entity not found"
+        else:
+            status['weather'] = "Not configured"
+
+        return status
+
+    def get_collection_stats(self) -> Dict[str, any]:
+        """Get collection statistics."""
+        return {
+            'pending_readings': len(self.pending_readings),
+            'collection_active': self._unsub_5min is not None,
+            'daily_summary_active': self._unsub_midnight is not None,
+            'user_inputs_today': len(self.user_inputs_today),
+            'anonymous_id': self.anonymous_id[:8] + "..." if self.anonymous_id else "None",
+            'data_endpoint': self.data_endpoint
+        }

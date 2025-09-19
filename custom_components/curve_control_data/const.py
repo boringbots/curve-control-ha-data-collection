@@ -9,9 +9,12 @@ CONF_API_KEY: Final = "api_key"
 CONF_COLLECTION_LEVEL: Final = "collection_level"
 CONF_ANONYMOUS_ID: Final = "anonymous_id"
 
-# Defaults
+# Defaults - CONFIGURED WITH YOUR SUPABASE PROJECT
 DEFAULT_DATA_ENDPOINT: Final = "https://bwtakgwvkeflttjytuje.supabase.co/functions/v1"
 DEFAULT_COLLECTION_LEVEL: Final = "standard"
+
+# Supabase Authentication - CONFIGURED
+SUPABASE_ANON_KEY: Final = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ3dGFrZ3d2a2VmbHR0anl0dWplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc5ODU3MTksImV4cCI6MjA3MzU2MTcxOX0.NrwIuLWvuVs3M3H6J7gWUjOXOIwBnZDFhIOso-PrOdE"
 
 # Collection levels
 COLLECTION_LEVELS: Final = {

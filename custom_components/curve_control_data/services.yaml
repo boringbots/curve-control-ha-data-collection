@@ -1,0 +1,9 @@
+trigger_manual_reading:
+  name: Trigger Manual Reading
+  description: Trigger an immediate sensor reading for testing
+  fields: {}
+
+get_sensor_status:
+  name: Get Sensor Status
+  description: Log the current status of all configured sensors
+  fields: {}
