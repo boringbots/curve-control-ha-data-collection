@@ -42,6 +42,7 @@ class SimpleDataCollector:
 
         # Track unsubscribe functions
         self._unsub_5min = None
+        self._unsub_hourly = None
         self._unsub_midnight = None
 
     async def async_start(self):
@@ -56,6 +57,14 @@ class SimpleDataCollector:
             second=0
         )
 
+        # Send batched data at the top of each hour (:00)
+        self._unsub_hourly = async_track_time_change(
+            self.hass,
+            self._send_hourly_batch,
+            minute=0,
+            second=30  # 30 seconds after the hour to ensure the :00 reading is collected
+        )
+
         # Send daily summary at midnight
         self._unsub_midnight = async_track_time_change(
             self.hass,
@@ -66,6 +75,7 @@ class SimpleDataCollector:
         )
 
         _LOGGER.info("Scheduled collection every 5 minutes on the clock (:00, :05, :10, etc.)")
+        _LOGGER.info("Scheduled hourly batch upload at the top of each hour")
         _LOGGER.info("Scheduled daily summary at midnight")
 
         # Collect initial reading
@@ -75,8 +85,15 @@ class SimpleDataCollector:
         """Stop the data collection."""
         if self._unsub_5min:
             self._unsub_5min()
+        if self._unsub_hourly:
+            self._unsub_hourly()
         if self._unsub_midnight:
             self._unsub_midnight()
+
+        # Send any remaining readings before stopping
+        if self.pending_readings:
+            _LOGGER.info("Sending final batch of readings before stopping...")
+            await self._send_sensor_batch()
 
     async def _collect_reading(self, _):
         """Collect a single sensor reading."""
@@ -152,10 +169,8 @@ class SimpleDataCollector:
                 _LOGGER.info("Manual trigger - sending reading immediately for testing...")
                 await self._send_sensor_batch()
                 self._manual_trigger = False
-            # Send readings in batches of 12 (1 hour worth) - but only for automatic collection
-            elif len(self.pending_readings) >= 12:
-                _LOGGER.info("Batch of 12 readings collected - sending now...")
-                await self._send_sensor_batch()
+            # Note: Automatic readings are now sent via hourly timer, not immediate batch sending
+            # This ensures consistent hourly uploads regardless of collection timing
 
             _LOGGER.info("=== END CURVE CONTROL SENSOR COLLECTION DEBUG ===")
 
@@ -209,6 +224,16 @@ class SimpleDataCollector:
             _LOGGER.error(f"❌ Network error sending sensor readings: {e}")
         except Exception as e:
             _LOGGER.error(f"❌ Unexpected error sending sensor readings: {e}")
+
+    async def _send_hourly_batch(self, _):
+        """Send hourly batch of readings at the top of each hour."""
+        if not self.pending_readings:
+            _LOGGER.info("⏰ Hourly batch check - no pending readings to send")
+            return
+
+        current_time = datetime.now()
+        _LOGGER.info(f"⏰ Hourly batch upload at {current_time.strftime('%H:%M:%S')} - sending {len(self.pending_readings)} readings")
+        await self._send_sensor_batch()
 
     async def _send_daily_summary(self, _):
         """Send daily summary at midnight."""
