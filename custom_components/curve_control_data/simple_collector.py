@@ -180,8 +180,14 @@ class SimpleDataCollector:
                         hvac_action = 'COOLING'
                         _LOGGER.info(f"  ❄️ Detected COOLING mode from state")
                     elif current_mode in ['AUTO']:
-                        _LOGGER.info(f"  🤖 Auto mode detected, inferring from temperature difference...")
-                        # For auto mode, we need to determine what it's actually doing
+                        _LOGGER.info(f"  🤖 Auto mode detected, checking for AC-only operation...")
+
+                        # Check if this is an AC-only unit (no heating capability)
+                        available_modes = hvac_state.attributes.get('hvac_modes', [])
+                        has_heat_mode = any(mode.lower() in ['heat', 'heating'] for mode in available_modes)
+                        _LOGGER.info(f"  Available HVAC modes: {available_modes}")
+                        _LOGGER.info(f"  Has heating capability: {has_heat_mode}")
+
                         current_temp = hvac_state.attributes.get('current_temperature')
                         target_temp = hvac_state.attributes.get('temperature')
                         _LOGGER.info(f"  Current temp: {current_temp}, Target temp: {target_temp}")
@@ -190,15 +196,26 @@ class SimpleDataCollector:
                             try:
                                 temp_diff = float(target_temp) - float(current_temp)
                                 _LOGGER.info(f"  Temperature difference: {temp_diff:.1f}°F")
-                                if temp_diff > 1.0:  # Need heating (increased threshold)
-                                    hvac_action = 'HEATING'
-                                    _LOGGER.info(f"  🔥 Auto mode: Need heating (target is {temp_diff:.1f}°F higher)")
-                                elif temp_diff < -1.0:  # Need cooling (increased threshold)
-                                    hvac_action = 'COOLING'
-                                    _LOGGER.info(f"  ❄️ Auto mode: Need cooling (target is {abs(temp_diff):.1f}°F lower)")
+
+                                if not has_heat_mode:
+                                    # AC-only unit: can only cool or be off
+                                    if temp_diff < -1.0:  # Need cooling
+                                        hvac_action = 'COOLING'
+                                        _LOGGER.info(f"  ❄️ AC-only auto mode: Cooling (target is {abs(temp_diff):.1f}°F lower)")
+                                    else:
+                                        hvac_action = 'OFF'
+                                        _LOGGER.info(f"  😴 AC-only auto mode: OFF (target not significantly lower)")
                                 else:
-                                    hvac_action = 'OFF'
-                                    _LOGGER.info(f"  😴 Auto mode: At target temperature (diff: {temp_diff:.1f}°F)")
+                                    # Full HVAC unit: can heat or cool
+                                    if temp_diff > 1.0:  # Need heating
+                                        hvac_action = 'HEATING'
+                                        _LOGGER.info(f"  🔥 Auto mode: Need heating (target is {temp_diff:.1f}°F higher)")
+                                    elif temp_diff < -1.0:  # Need cooling
+                                        hvac_action = 'COOLING'
+                                        _LOGGER.info(f"  ❄️ Auto mode: Need cooling (target is {abs(temp_diff):.1f}°F lower)")
+                                    else:
+                                        hvac_action = 'OFF'
+                                        _LOGGER.info(f"  😴 Auto mode: At target temperature (diff: {temp_diff:.1f}°F)")
                             except (ValueError, TypeError) as e:
                                 hvac_action = 'OFF'
                                 _LOGGER.error(f"  ❌ Error converting temperatures: {e}")
@@ -262,7 +279,14 @@ class SimpleDataCollector:
                 final_hvac_action = 'OFF'
                 _LOGGER.info(f"  ✅ Mapped to: OFF (default for '{hvac_action}')")
 
-            _LOGGER.info(f"🎯 FINAL RESULT: HVAC state = '{final_hvac_action}'")
+            # Get fan mode information
+            fan_mode = None
+            if hvac_state.domain == 'climate':
+                fan_mode = hvac_state.attributes.get('fan_mode', 'unknown')
+                available_fan_modes = hvac_state.attributes.get('fan_modes', [])
+                _LOGGER.info(f"  Fan mode: '{fan_mode}' (available: {available_fan_modes})")
+
+            _LOGGER.info(f"🎯 FINAL RESULT: HVAC state = '{final_hvac_action}', Fan mode = '{fan_mode}'")
 
             try:
                 indoor_temp = float(temp_state.state)
@@ -278,7 +302,8 @@ class SimpleDataCollector:
                 'indoor_temp': indoor_temp,
                 'indoor_humidity': humidity,
                 'hvac_state': final_hvac_action,
-                'target_temp': target_temp
+                'target_temp': target_temp,
+                'fan_mode': fan_mode  # Add fan mode to the reading
             }
 
             self.pending_readings.append(reading)
