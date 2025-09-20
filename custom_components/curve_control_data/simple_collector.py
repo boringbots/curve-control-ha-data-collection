@@ -143,141 +143,34 @@ class SimpleDataCollector:
             _LOGGER.info(f"  current_temperature: {hvac_state.attributes.get('current_temperature', 'NOT FOUND')}")
             _LOGGER.info(f"  temperature: {hvac_state.attributes.get('temperature', 'NOT FOUND')}")
 
-            # Determine HVAC state based on entity type
-            hvac_action = None
-
+            # Simply copy what Home Assistant reports directly
             if hvac_state.domain == 'climate':
                 _LOGGER.info(f"  🌡️ Processing CLIMATE entity...")
 
-                # Method 1: Check hvac_action attribute (most reliable for climate entities)
+                # First try hvac_action (current action)
                 if 'hvac_action' in hvac_state.attributes:
-                    hvac_action = hvac_state.attributes.get('hvac_action', '').upper()
-                    _LOGGER.info(f"  ✅ Found hvac_action attribute: '{hvac_action}'")
+                    final_hvac_action = hvac_state.attributes.get('hvac_action', 'off')
+                    _LOGGER.info(f"  ✅ Using hvac_action: '{final_hvac_action}'")
                 else:
-                    _LOGGER.info(f"  ❌ No hvac_action attribute found")
-
-                # Method 2: Check hvac_mode, hvac_modes, or the state itself
-                if not hvac_action or hvac_action in ['OFF', 'IDLE', 'FAN', '']:
-                    _LOGGER.info(f"  🔄 Checking fallback methods (hvac_action was: '{hvac_action}')")
-
-                    # Try different attribute names
-                    hvac_mode = hvac_state.attributes.get('hvac_mode')  # Standard attribute
-                    hvac_modes = hvac_state.attributes.get('hvac_modes')  # Sometimes it's plural
-                    current_state = hvac_state.state
-
-                    _LOGGER.info(f"  hvac_mode attribute: '{hvac_mode}'")
-                    _LOGGER.info(f"  hvac_modes attribute: '{hvac_modes}'")
-                    _LOGGER.info(f"  entity state: '{current_state}'")
-
-                    # Use the state as the current mode (this is usually what we want)
-                    current_mode = str(current_state).upper()
-                    _LOGGER.info(f"  Using current state as mode: '{current_mode}'")
-
-                    if current_mode in ['HEAT', 'HEATING']:
-                        hvac_action = 'HEATING'
-                        _LOGGER.info(f"  🔥 Detected HEATING mode from state")
-                    elif current_mode in ['COOL', 'COOLING']:
-                        hvac_action = 'COOLING'
-                        _LOGGER.info(f"  ❄️ Detected COOLING mode from state")
-                    elif current_mode in ['AUTO']:
-                        _LOGGER.info(f"  🤖 Auto mode detected, checking for AC-only operation...")
-
-                        # Check if this is an AC-only unit (no heating capability)
-                        available_modes = hvac_state.attributes.get('hvac_modes', [])
-                        has_heat_mode = any(mode.lower() in ['heat', 'heating'] for mode in available_modes)
-                        _LOGGER.info(f"  Available HVAC modes: {available_modes}")
-                        _LOGGER.info(f"  Has heating capability: {has_heat_mode}")
-
-                        current_temp = hvac_state.attributes.get('current_temperature')
-                        target_temp = hvac_state.attributes.get('temperature')
-                        _LOGGER.info(f"  Current temp: {current_temp}, Target temp: {target_temp}")
-
-                        if current_temp and target_temp:
-                            try:
-                                temp_diff = float(target_temp) - float(current_temp)
-                                _LOGGER.info(f"  Temperature difference: {temp_diff:.1f}°F")
-
-                                if not has_heat_mode:
-                                    # AC-only unit: can only cool or be off
-                                    if temp_diff < -1.0:  # Need cooling
-                                        hvac_action = 'COOLING'
-                                        _LOGGER.info(f"  ❄️ AC-only auto mode: Cooling (target is {abs(temp_diff):.1f}°F lower)")
-                                    else:
-                                        hvac_action = 'OFF'
-                                        _LOGGER.info(f"  😴 AC-only auto mode: OFF (target not significantly lower)")
-                                else:
-                                    # Full HVAC unit: can heat or cool
-                                    if temp_diff > 1.0:  # Need heating
-                                        hvac_action = 'HEATING'
-                                        _LOGGER.info(f"  🔥 Auto mode: Need heating (target is {temp_diff:.1f}°F higher)")
-                                    elif temp_diff < -1.0:  # Need cooling
-                                        hvac_action = 'COOLING'
-                                        _LOGGER.info(f"  ❄️ Auto mode: Need cooling (target is {abs(temp_diff):.1f}°F lower)")
-                                    else:
-                                        hvac_action = 'OFF'
-                                        _LOGGER.info(f"  😴 Auto mode: At target temperature (diff: {temp_diff:.1f}°F)")
-                            except (ValueError, TypeError) as e:
-                                hvac_action = 'OFF'
-                                _LOGGER.error(f"  ❌ Error converting temperatures: {e}")
-                        else:
-                            hvac_action = 'OFF'
-                            _LOGGER.warning(f"  ⚠️ Missing temperature data for auto mode")
-                    elif current_mode in ['OFF']:
-                        hvac_action = 'OFF'
-                        _LOGGER.info(f"  😴 Detected OFF mode from state")
-                    elif current_mode in ['FAN_ONLY', 'FAN']:
-                        hvac_action = 'OFF'
-                        _LOGGER.info(f"  🌀 Detected FAN_ONLY mode - treating as OFF")
-                    else:
-                        hvac_action = 'OFF'
-                        _LOGGER.info(f"  😴 Unknown mode '{current_mode}' - defaulting to OFF")
-                else:
-                    _LOGGER.info(f"  ✅ Using hvac_action: '{hvac_action}'")
+                    # Fall back to current state (mode)
+                    final_hvac_action = hvac_state.state
+                    _LOGGER.info(f"  ✅ Using entity state: '{final_hvac_action}'")
 
             elif hvac_state.domain == 'sensor':
                 # For sensor entities, use the state directly
-                sensor_value = hvac_state.state.upper()
-                _LOGGER.info(f"  Sensor value: {sensor_value}")
-                if sensor_value in ['HEAT', 'HEATING', '1', 'ON'] and 'heat' in hvac_state.entity_id.lower():
-                    hvac_action = 'HEATING'
-                elif sensor_value in ['COOL', 'COOLING', '1', 'ON'] and 'cool' in hvac_state.entity_id.lower():
-                    hvac_action = 'COOLING'
-                elif sensor_value in ['HEAT', 'HEATING']:
-                    hvac_action = 'HEATING'
-                elif sensor_value in ['COOL', 'COOLING']:
-                    hvac_action = 'COOLING'
-                else:
-                    hvac_action = 'OFF'
+                final_hvac_action = hvac_state.state
+                _LOGGER.info(f"  ✅ Using sensor state: '{final_hvac_action}'")
 
             elif hvac_state.domain == 'binary_sensor':
-                # For binary sensors, check if it's on/off and infer from entity name
-                sensor_state = hvac_state.state.lower()
-                entity_name = hvac_state.entity_id.lower()
-                _LOGGER.info(f"  Binary sensor state: {sensor_state}, entity: {entity_name}")
+                # For binary sensors, use the state directly
+                final_hvac_action = hvac_state.state
+                _LOGGER.info(f"  ✅ Using binary sensor state: '{final_hvac_action}'")
 
-                if sensor_state == 'on':
-                    if 'heat' in entity_name or 'heating' in entity_name:
-                        hvac_action = 'HEATING'
-                    elif 'cool' in entity_name or 'cooling' in entity_name or 'ac' in entity_name:
-                        hvac_action = 'COOLING'
-                    else:
-                        hvac_action = 'HEATING'  # Default assumption for generic binary sensor
-                else:
-                    hvac_action = 'OFF'
-
-            # Map Home Assistant actions to our expected values
-            _LOGGER.info(f"🎯 FINAL HVAC STATE MAPPING:")
-            _LOGGER.info(f"  Detected hvac_action: '{hvac_action}'")
-
-            if hvac_action in ['HEATING', 'HEAT']:
-                final_hvac_action = 'HEAT'
-                _LOGGER.info(f"  ✅ Mapped to: HEAT")
-            elif hvac_action in ['COOLING', 'COOL']:
-                final_hvac_action = 'COOL'
-                _LOGGER.info(f"  ✅ Mapped to: COOL")
             else:
-                final_hvac_action = 'OFF'
-                _LOGGER.info(f"  ✅ Mapped to: OFF (default for '{hvac_action}')")
+                final_hvac_action = 'off'
+                _LOGGER.info(f"  ⚠️ Unknown domain, defaulting to off")
+
+            _LOGGER.info(f"🎯 HVAC STATE: '{final_hvac_action}' (copied directly from HA)")
 
             # Get fan mode information
             fan_mode = None
@@ -388,14 +281,14 @@ class SimpleDataCollector:
             if self.pending_readings:
                 await self._send_sensor_batch()
 
-            # Get detailed weather forecast for the next day
+            # Get 24-hour weather forecast using HA forecast service
             weather_forecast = None
             if self.weather_entity:
                 weather_state = self.hass.states.get(self.weather_entity)
                 if weather_state:
-                    _LOGGER.info("🌤️ Collecting detailed weather forecast data...")
+                    _LOGGER.info("🌤️ Collecting 24-hour weather forecast using HA forecast service...")
 
-                    # Get current conditions
+                    # Get current conditions from entity state
                     current_conditions = {
                         'condition': weather_state.state,
                         'temperature': weather_state.attributes.get('temperature'),
@@ -406,83 +299,68 @@ class SimpleDataCollector:
                         'visibility': weather_state.attributes.get('visibility')
                     }
 
-                    # Get forecast data
-                    raw_forecast = weather_state.attributes.get('forecast', [])
-                    _LOGGER.info(f"  Raw forecast contains {len(raw_forecast)} periods")
+                    # Use HA forecast service to get hourly forecast
+                    try:
+                        forecast_response = await self.hass.services.async_call(
+                            "weather",
+                            "get_forecasts",
+                            {
+                                "entity_id": self.weather_entity,
+                                "type": "hourly"
+                            },
+                            return_response=True
+                        )
 
-                    # Process forecast data
-                    tomorrow_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
-                    next_48h_date = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
-                    hourly_forecast = []
-                    daily_forecast = []
+                        # Extract forecast data for our entity
+                        entity_forecast = forecast_response.get(self.weather_entity, {})
+                        raw_forecast = entity_forecast.get('forecast', [])
 
-                    for forecast_item in raw_forecast:
-                        if isinstance(forecast_item, dict):
-                            forecast_time = forecast_item.get('datetime')
-                            if forecast_time:
-                                forecast_time_str = str(forecast_time)
+                        _LOGGER.info(f"  ✅ Forecast service returned {len(raw_forecast)} hourly periods")
 
-                                # Extract forecast data
-                                forecast_data = {
-                                    'datetime': forecast_time,
+                        # Take first 24 hours and simplify the data
+                        hourly_forecast = []
+                        for i, forecast_item in enumerate(raw_forecast[:24]):
+                            if isinstance(forecast_item, dict):
+                                hourly_forecast.append({
+                                    'datetime': forecast_item.get('datetime'),
                                     'condition': forecast_item.get('condition'),
                                     'temperature': forecast_item.get('temperature'),
-                                    'templow': forecast_item.get('templow'),
                                     'humidity': forecast_item.get('humidity'),
                                     'pressure': forecast_item.get('pressure'),
                                     'wind_speed': forecast_item.get('wind_speed'),
                                     'wind_bearing': forecast_item.get('wind_bearing'),
                                     'precipitation': forecast_item.get('precipitation'),
                                     'precipitation_probability': forecast_item.get('precipitation_probability')
-                                }
+                                })
 
-                                # Check if this is for tomorrow or next 48 hours
-                                if tomorrow_date in forecast_time_str or next_48h_date in forecast_time_str:
-                                    # Determine if this is hourly or daily data based on datetime format
-                                    if 'T' in forecast_time_str and len(forecast_time_str) > 10:
-                                        # This looks like hourly data (has time component)
-                                        hourly_forecast.append(forecast_data)
-                                    else:
-                                        # This looks like daily data
-                                        daily_forecast.append(forecast_data)
-                                elif len(daily_forecast) < 3:
-                                    # Keep first few daily forecasts regardless of date
-                                    if 'T' not in forecast_time_str or len(forecast_time_str) <= 10:
-                                        daily_forecast.append(forecast_data)
+                        weather_forecast = {
+                            'current_conditions': current_conditions,
+                            'hourly_forecast': hourly_forecast,
+                            'forecast_updated': datetime.now().isoformat(),
+                            'entity_id': self.weather_entity,
+                            'forecast_method': 'ha_service'
+                        }
 
-                    # Limit forecasts and sort by datetime
-                    hourly_forecast = sorted(hourly_forecast, key=lambda x: x['datetime'])[:24]
-                    daily_forecast = sorted(daily_forecast, key=lambda x: x['datetime'])[:5]
+                        _LOGGER.info(f"  ✅ Collected {len(hourly_forecast)} hours of weather forecast data")
 
-                    # If we don't have hourly data, create pseudo-hourly from daily
-                    if not hourly_forecast and daily_forecast:
-                        _LOGGER.info("  📅 No hourly data available, creating hourly estimates from daily data")
-                        for daily_item in daily_forecast[:2]:  # Use next 2 days
-                            # Create 24 hourly entries from daily data
-                            base_date = daily_item['datetime']
-                            if isinstance(base_date, str):
-                                try:
-                                    base_date = datetime.fromisoformat(base_date.replace('Z', '+00:00'))
-                                except:
-                                    continue
+                    except Exception as e:
+                        _LOGGER.error(f"  ❌ Error calling weather forecast service: {e}")
+                        _LOGGER.info("  🔄 Falling back to entity attributes...")
 
-                            for hour in range(24):
-                                hourly_item = daily_item.copy()
-                                hourly_item['datetime'] = (base_date + timedelta(hours=hour)).isoformat()
-                                hourly_item['estimated'] = True  # Mark as estimated
-                                hourly_forecast.append(hourly_item)
+                        # Fallback to old method if service fails
+                        raw_forecast = weather_state.attributes.get('forecast', [])
+                        hourly_forecast = raw_forecast[:24]  # Take first 24 items
 
-                        hourly_forecast = hourly_forecast[:24]  # Limit to 24 hours
+                        weather_forecast = {
+                            'current_conditions': current_conditions,
+                            'hourly_forecast': hourly_forecast,
+                            'forecast_updated': datetime.now().isoformat(),
+                            'entity_id': self.weather_entity,
+                            'forecast_method': 'entity_attributes'
+                        }
 
-                    weather_forecast = {
-                        'current_conditions': current_conditions,
-                        'hourly_forecast': hourly_forecast,
-                        'daily_forecast': daily_forecast,
-                        'forecast_updated': datetime.now().isoformat(),
-                        'entity_id': self.weather_entity
-                    }
+                        _LOGGER.info(f"  ✅ Fallback collected {len(hourly_forecast)} forecast periods")
 
-                    _LOGGER.info(f"  ✅ Collected weather data: {len(hourly_forecast)} hourly + {len(daily_forecast)} daily forecasts")
                 else:
                     _LOGGER.warning("  ❌ Weather entity not found")
             else:
