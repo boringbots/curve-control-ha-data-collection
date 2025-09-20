@@ -577,6 +577,57 @@ class SimpleDataCollector:
         self._manual_trigger = True  # Flag to send immediately after collection
         await self._collect_reading(None)
 
+    async def trigger_thermal_calculation(self):
+        """Trigger manual thermal rate calculation for testing."""
+        _LOGGER.info("🧮 Triggering manual thermal rate calculation...")
+        try:
+            session = async_get_clientsession(self.hass)
+
+            # Calculate for yesterday's data
+            calculation_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+            payload = {
+                'anonymous_id': self.anonymous_id,
+                'date': calculation_date,
+                'user_inputs': {'manual_calculation': True},
+                'weather_forecast': None
+            }
+
+            headers = {
+                'Authorization': f'Bearer {SUPABASE_ANON_KEY}',
+                'apikey': SUPABASE_ANON_KEY,
+                'Content-Type': 'application/json'
+            }
+
+            _LOGGER.info(f"  Requesting thermal rates for date: {calculation_date}")
+
+            async with session.post(
+                f"{self.data_endpoint}/daily-summary",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    thermal_rates = result.get('thermal_rates', {})
+
+                    _LOGGER.info(f"🎯 Manual thermal calculation results:")
+                    _LOGGER.info(f"  Heating rate: {thermal_rates.get('heating_rate', 'None')} °F/hr ({thermal_rates.get('heating_samples', 0)} samples)")
+                    _LOGGER.info(f"  Cooling rate: {thermal_rates.get('cooling_rate', 'None')} °F/hr ({thermal_rates.get('cooling_samples', 0)} samples)")
+                    _LOGGER.info(f"  Natural rate: {thermal_rates.get('natural_rate', 'None')} °F/hr ({thermal_rates.get('natural_samples', 0)} samples)")
+
+                    if thermal_rates:
+                        await self._update_thermal_rate_sensors(thermal_rates)
+                        _LOGGER.info("  ✅ Updated Home Assistant sensors with thermal rates")
+                    else:
+                        _LOGGER.warning("  ⚠️ No thermal rates calculated - may need more data")
+                else:
+                    error_text = await response.text()
+                    _LOGGER.error(f"  ❌ Failed to calculate thermal rates: {response.status} - {error_text}")
+
+        except Exception as e:
+            _LOGGER.error(f"❌ Error calculating thermal rates: {e}")
+
     def get_sensor_status(self) -> Dict[str, str]:
         """Get status of all configured sensors."""
         status = {}

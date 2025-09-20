@@ -92,6 +92,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, "trigger_manual_reading")
         hass.services.async_remove(DOMAIN, "get_sensor_status")
+        hass.services.async_remove(DOMAIN, "trigger_thermal_calculation")
 
     return True
 
@@ -114,6 +115,15 @@ async def _async_register_services(hass: HomeAssistant, collector: SimpleDataCol
             _LOGGER.info("✅ Manual sensor reading triggered successfully")
         except Exception as e:
             _LOGGER.error(f"❌ Error triggering manual reading: {e}")
+
+    async def handle_thermal_calculation(call):
+        """Handle manual thermal calculation service call."""
+        _LOGGER.info("🧮 Manual thermal calculation service called!")
+        try:
+            await collector.trigger_thermal_calculation()
+            _LOGGER.info("✅ Manual thermal calculation completed")
+        except Exception as e:
+            _LOGGER.error(f"❌ Error triggering thermal calculation: {e}")
 
     async def handle_get_sensor_status(call):
         """Handle get sensor status service call."""
@@ -153,3 +163,13 @@ async def _async_register_services(hass: HomeAssistant, collector: SimpleDataCol
         _LOGGER.info("✅ Registered service: curve_control_data.get_sensor_status")
     else:
         _LOGGER.info("⚠️ Service get_sensor_status already exists")
+
+    if not hass.services.has_service(DOMAIN, "trigger_thermal_calculation"):
+        hass.services.async_register(
+            DOMAIN,
+            "trigger_thermal_calculation",
+            handle_thermal_calculation
+        )
+        _LOGGER.info("✅ Registered service: curve_control_data.trigger_thermal_calculation")
+    else:
+        _LOGGER.info("⚠️ Service trigger_thermal_calculation already exists")
