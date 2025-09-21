@@ -43,7 +43,6 @@ class SimpleDataCollector:
         # Track unsubscribe functions
         self._unsub_5min = None
         self._unsub_hourly = None
-        self._unsub_midnight = None
 
     async def async_start(self):
         """Start the data collection."""
@@ -65,18 +64,8 @@ class SimpleDataCollector:
             second=30  # 30 seconds after the hour to ensure the :00 reading is collected
         )
 
-        # Send daily summary at midnight
-        self._unsub_midnight = async_track_time_change(
-            self.hass,
-            self._send_daily_summary,
-            hour=0,
-            minute=5,  # 5 minutes after midnight to ensure day rollover
-            second=0
-        )
-
         _LOGGER.info("Scheduled collection every 5 minutes on the clock (:00, :05, :10, etc.)")
-        _LOGGER.info("Scheduled hourly batch upload at the top of each hour")
-        _LOGGER.info("Scheduled daily summary at midnight")
+        _LOGGER.info("Scheduled hourly enriched batch upload at the top of each hour")
 
         # Collect initial reading
         await self._collect_reading(None)
@@ -87,8 +76,6 @@ class SimpleDataCollector:
             self._unsub_5min()
         if self._unsub_hourly:
             self._unsub_hourly()
-        if self._unsub_midnight:
-            self._unsub_midnight()
 
         # Send any remaining readings before stopping
         if self.pending_readings:
@@ -172,11 +159,84 @@ class SimpleDataCollector:
 
             _LOGGER.info(f"🎯 HVAC STATE: '{final_hvac_action}' (copied directly from HA)")
 
-            # Get fan mode information
+            # Normalize and validate HVAC state for database constraint
+            # First normalize to lowercase for consistency
+            original_state = final_hvac_action
+            if final_hvac_action:
+                final_hvac_action = str(final_hvac_action).lower()
+
+            # Valid HVAC states: off, auto, cool, heat, fan_only, heat_cool (mapped to auto)
+            valid_hvac_states = {
+                'off', 'auto', 'cool', 'heat', 'fan_only'
+            }
+
+            if final_hvac_action not in valid_hvac_states:
+                # Map common Home Assistant HVAC states to valid values
+                state_mapping = {
+                    'heating': 'heat',
+                    'cooling': 'cool',
+                    'heat_cool': 'auto',
+                    'idle': 'off',
+                    'fan': 'fan_only',
+                    'dry': 'fan_only',
+                    'drying': 'fan_only',
+                    'defrost': 'heat',
+                    'preheating': 'heat',
+                    'aux_heat': 'heat',
+                    'auxiliary_heat': 'heat',
+                    'electric_heat': 'heat',
+                    'none': 'off',
+                    '': 'off'
+                }
+
+                mapped_state = state_mapping.get(final_hvac_action, 'off')
+                if original_state != final_hvac_action or final_hvac_action != mapped_state:
+                    _LOGGER.warning(f"  ⚠️ Normalized HVAC state '{original_state}' -> '{mapped_state}'")
+                final_hvac_action = mapped_state
+            else:
+                if original_state != final_hvac_action:
+                    _LOGGER.info(f"  🔄 Normalized HVAC state '{original_state}' -> '{final_hvac_action}'")
+                else:
+                    _LOGGER.info(f"  ✅ HVAC state '{final_hvac_action}' is valid")
+
+            # Get and normalize fan mode information
             fan_mode = None
             if hvac_state.domain == 'climate':
-                fan_mode = hvac_state.attributes.get('fan_mode', 'unknown')
+                raw_fan_mode = hvac_state.attributes.get('fan_mode', 'auto')
                 available_fan_modes = hvac_state.attributes.get('fan_modes', [])
+
+                # Normalize fan mode to lowercase
+                original_fan_mode = raw_fan_mode
+                if raw_fan_mode:
+                    fan_mode = str(raw_fan_mode).lower()
+
+                # Valid fan modes: auto, low, med, high
+                valid_fan_modes = {'auto', 'low', 'med', 'high'}
+
+                if fan_mode not in valid_fan_modes:
+                    # Map common fan mode variations
+                    fan_mapping = {
+                        'medium': 'med',
+                        'middle': 'med',
+                        'mid': 'med',
+                        'maximum': 'high',
+                        'max': 'high',
+                        'minimum': 'low',
+                        'min': 'low',
+                        'none': 'auto',
+                        '': 'auto'
+                    }
+
+                    mapped_fan = fan_mapping.get(fan_mode, 'auto')
+                    if original_fan_mode != fan_mode or fan_mode != mapped_fan:
+                        _LOGGER.warning(f"  ⚠️ Normalized fan mode '{original_fan_mode}' -> '{mapped_fan}'")
+                    fan_mode = mapped_fan
+                else:
+                    if original_fan_mode != fan_mode:
+                        _LOGGER.info(f"  🔄 Normalized fan mode '{original_fan_mode}' -> '{fan_mode}'")
+                    else:
+                        _LOGGER.info(f"  ✅ Fan mode '{fan_mode}' is valid")
+
                 _LOGGER.info(f"  Fan mode: '{fan_mode}' (available: {available_fan_modes})")
 
             _LOGGER.info(f"🎯 FINAL RESULT: HVAC state = '{final_hvac_action}', Fan mode = '{fan_mode}'")
@@ -264,122 +324,27 @@ class SimpleDataCollector:
         except Exception as e:
             _LOGGER.error(f"❌ Unexpected error sending sensor readings: {e}")
 
-    async def _send_hourly_batch(self, _):
-        """Send hourly batch of readings at the top of each hour."""
+    async def _send_enriched_sensor_batch(self):
+        """Send sensor readings enriched with weather forecast and thermal rates."""
         if not self.pending_readings:
-            _LOGGER.info("⏰ Hourly batch check - no pending readings to send")
+            _LOGGER.info("No pending readings to send")
             return
 
-        current_time = datetime.now()
-        _LOGGER.info(f"⏰ Hourly batch upload at {current_time.strftime('%H:%M:%S')} - sending {len(self.pending_readings)} readings")
-        await self._send_sensor_batch()
-
-    async def _send_daily_summary(self, _):
-        """Send daily summary at midnight."""
         try:
-            # Send any pending readings first
-            if self.pending_readings:
-                await self._send_sensor_batch()
+            # Get weather forecast
+            weather_forecast = await self._collect_weather_forecast()
 
-            # Get 24-hour weather forecast using HA forecast service
-            weather_forecast = None
-            if self.weather_entity:
-                weather_state = self.hass.states.get(self.weather_entity)
-                if weather_state:
-                    _LOGGER.info("🌤️ Collecting 24-hour weather forecast using HA forecast service...")
+            # Get thermal rates (calculated from yesterday's data)
+            thermal_rates = await self._get_thermal_rates()
 
-                    # Get current conditions from entity state
-                    current_conditions = {
-                        'condition': weather_state.state,
-                        'temperature': weather_state.attributes.get('temperature'),
-                        'humidity': weather_state.attributes.get('humidity'),
-                        'pressure': weather_state.attributes.get('pressure'),
-                        'wind_speed': weather_state.attributes.get('wind_speed'),
-                        'wind_bearing': weather_state.attributes.get('wind_bearing'),
-                        'visibility': weather_state.attributes.get('visibility')
-                    }
-
-                    # Use HA forecast service to get hourly forecast
-                    try:
-                        forecast_response = await self.hass.services.async_call(
-                            "weather",
-                            "get_forecasts",
-                            {
-                                "entity_id": self.weather_entity,
-                                "type": "hourly"
-                            },
-                            return_response=True
-                        )
-
-                        # Extract forecast data for our entity
-                        entity_forecast = forecast_response.get(self.weather_entity, {})
-                        raw_forecast = entity_forecast.get('forecast', [])
-
-                        _LOGGER.info(f"  ✅ Forecast service returned {len(raw_forecast)} hourly periods")
-
-                        # Take first 24 hours and simplify the data
-                        hourly_forecast = []
-                        for i, forecast_item in enumerate(raw_forecast[:24]):
-                            if isinstance(forecast_item, dict):
-                                hourly_forecast.append({
-                                    'datetime': forecast_item.get('datetime'),
-                                    'condition': forecast_item.get('condition'),
-                                    'temperature': forecast_item.get('temperature'),
-                                    'humidity': forecast_item.get('humidity'),
-                                    'pressure': forecast_item.get('pressure'),
-                                    'wind_speed': forecast_item.get('wind_speed'),
-                                    'wind_bearing': forecast_item.get('wind_bearing'),
-                                    'precipitation': forecast_item.get('precipitation'),
-                                    'precipitation_probability': forecast_item.get('precipitation_probability')
-                                })
-
-                        weather_forecast = {
-                            'current_conditions': current_conditions,
-                            'hourly_forecast': hourly_forecast,
-                            'forecast_updated': datetime.now().isoformat(),
-                            'entity_id': self.weather_entity,
-                            'forecast_method': 'ha_service'
-                        }
-
-                        _LOGGER.info(f"  ✅ Collected {len(hourly_forecast)} hours of weather forecast data")
-
-                    except Exception as e:
-                        _LOGGER.error(f"  ❌ Error calling weather forecast service: {e}")
-                        _LOGGER.info("  🔄 Falling back to entity attributes...")
-
-                        # Fallback to old method if service fails
-                        raw_forecast = weather_state.attributes.get('forecast', [])
-                        hourly_forecast = raw_forecast[:24]  # Take first 24 items
-
-                        weather_forecast = {
-                            'current_conditions': current_conditions,
-                            'hourly_forecast': hourly_forecast,
-                            'forecast_updated': datetime.now().isoformat(),
-                            'entity_id': self.weather_entity,
-                            'forecast_method': 'entity_attributes'
-                        }
-
-                        _LOGGER.info(f"  ✅ Fallback collected {len(hourly_forecast)} forecast periods")
-
-                else:
-                    _LOGGER.warning("  ❌ Weather entity not found")
-            else:
-                _LOGGER.info("  ⚠️ No weather entity configured")
-
-            # Prepare user inputs (services called today)
-            user_inputs = {
-                'inputs_today': len(self.user_inputs_today),
-                'services_used': self.user_inputs_today
-            }
-
-            # Send daily summary
             session = async_get_clientsession(self.hass)
 
             payload = {
                 'anonymous_id': self.anonymous_id,
-                'date': (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d'),  # Yesterday's data
-                'user_inputs': user_inputs,
-                'weather_forecast': weather_forecast
+                'readings': self.pending_readings,
+                'weather_forecast': weather_forecast,
+                'thermal_rates': thermal_rates,
+                'timestamp': datetime.now().isoformat()
             }
 
             # Add authentication headers for Supabase
@@ -389,32 +354,164 @@ class SimpleDataCollector:
                 'Content-Type': 'application/json'
             }
 
+            _LOGGER.info(f"Sending {len(self.pending_readings)} enriched readings to {self.data_endpoint}/sensor-data")
+            _LOGGER.debug(f"Payload: {payload}")
+
             async with session.post(
-                f"{self.data_endpoint}/daily-summary",
+                f"{self.data_endpoint}/sensor-data",
                 json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
                 if response.status == 200:
                     result = await response.json()
-                    thermal_rates = result.get('thermal_rates', {})
-
-                    _LOGGER.info(f"Daily summary sent. Thermal rates: {thermal_rates}")
-
-                    # Store thermal rates as sensor values for Home Assistant to use
-                    if thermal_rates:
-                        await self._update_thermal_rate_sensors(thermal_rates)
+                    _LOGGER.info(
+                        f"✅ Successfully sent {len(self.pending_readings)} enriched sensor readings. "
+                        f"Server response: {result.get('message', 'Success')}"
+                    )
+                    self.pending_readings.clear()
                 else:
-                    _LOGGER.error(f"Failed to send daily summary: {response.status}")
+                    error_text = await response.text()
+                    _LOGGER.error(f"❌ Failed to send enriched sensor readings: {response.status} - {error_text}")
 
-            # Reset daily counters
-            self.user_inputs_today.clear()
+        except asyncio.TimeoutError:
+            _LOGGER.error("❌ Timeout sending enriched sensor readings to server")
+        except aiohttp.ClientError as e:
+            _LOGGER.error(f"❌ Network error sending enriched sensor readings: {e}")
+        except Exception as e:
+            _LOGGER.error(f"❌ Unexpected error sending enriched sensor readings: {e}")
+
+    async def _collect_weather_forecast(self):
+        """Collect 24-hour weather forecast data."""
+        if not self.weather_entity:
+            return None
+
+        try:
+            weather_state = self.hass.states.get(self.weather_entity)
+            if not weather_state:
+                _LOGGER.warning(f"Weather entity {self.weather_entity} not found")
+                return None
+
+            # Get current conditions from entity state
+            current_conditions = {
+                'condition': weather_state.state,
+                'temperature': weather_state.attributes.get('temperature'),
+                'humidity': weather_state.attributes.get('humidity'),
+                'pressure': weather_state.attributes.get('pressure'),
+                'wind_speed': weather_state.attributes.get('wind_speed'),
+                'wind_bearing': weather_state.attributes.get('wind_bearing'),
+                'visibility': weather_state.attributes.get('visibility')
+            }
+
+            # Use HA forecast service to get hourly forecast
+            try:
+                forecast_response = await self.hass.services.async_call(
+                    "weather",
+                    "get_forecasts",
+                    {
+                        "entity_id": self.weather_entity,
+                        "type": "hourly"
+                    },
+                    blocking=True,
+                    return_response=True
+                )
+
+                # Extract forecast data for our entity
+                entity_forecast = forecast_response.get(self.weather_entity, {})
+                raw_forecast = entity_forecast.get('forecast', [])
+
+                _LOGGER.info(f"  ✅ Forecast service returned {len(raw_forecast)} hourly periods")
+
+                # Take first 24 hours and simplify the data
+                hourly_forecast = []
+                for i, forecast_item in enumerate(raw_forecast[:24]):
+                    if isinstance(forecast_item, dict):
+                        hourly_forecast.append({
+                            'datetime': forecast_item.get('datetime'),
+                            'condition': forecast_item.get('condition'),
+                            'temperature': forecast_item.get('temperature'),
+                            'humidity': forecast_item.get('humidity'),
+                            'pressure': forecast_item.get('pressure'),
+                            'precipitation_probability': forecast_item.get('precipitation_probability'),
+                            'wind_speed': forecast_item.get('wind_speed')
+                        })
+
+                weather_forecast = {
+                    'current_conditions': current_conditions,
+                    'hourly_forecast': hourly_forecast,
+                    'forecast_updated': datetime.now().isoformat(),
+                    'entity_id': self.weather_entity,
+                    'forecast_method': 'ha_service'
+                }
+
+                _LOGGER.info(f"  ✅ Collected {len(hourly_forecast)} hours of weather forecast data")
+                return weather_forecast
+
+            except Exception as e:
+                _LOGGER.error(f"  ❌ Error calling weather forecast service: {e}")
+                _LOGGER.info("  🔄 Falling back to entity attributes...")
+
+                # Fallback to old method if service fails
+                raw_forecast = weather_state.attributes.get('forecast', [])
+                hourly_forecast = raw_forecast[:24]  # Take first 24 items
+
+                weather_forecast = {
+                    'current_conditions': current_conditions,
+                    'hourly_forecast': hourly_forecast,
+                    'forecast_updated': datetime.now().isoformat(),
+                    'entity_id': self.weather_entity,
+                    'forecast_method': 'entity_attributes'
+                }
+
+                _LOGGER.info(f"  ✅ Fallback collected {len(hourly_forecast)} forecast periods")
+                return weather_forecast
 
         except Exception as e:
-            _LOGGER.error(f"Error sending daily summary: {e}")
+            _LOGGER.error(f"❌ Error collecting weather forecast: {e}")
+            return None
 
-    async def _update_thermal_rate_sensors(self, thermal_rates: Dict):
-        """Update Home Assistant sensors with calculated thermal rates."""
+    async def _get_thermal_rates(self):
+        """Get calculated thermal rates from the backend."""
+        try:
+            session = async_get_clientsession(self.hass)
+            headers = {
+                'Authorization': f'Bearer {SUPABASE_ANON_KEY}',
+                'apikey': SUPABASE_ANON_KEY,
+                'Content-Type': 'application/json'
+            }
+
+            # Call backend to calculate rates for yesterday's data
+            async with session.post(
+                f"{self.data_endpoint}/calculate-rates",
+                json={'anonymous_id': self.anonymous_id},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    _LOGGER.info(f"✅ Retrieved thermal rates: {result}")
+                    return result.get('thermal_rates')
+                else:
+                    error_text = await response.text()
+                    _LOGGER.warning(f"⚠️ Could not get thermal rates: {response.status} - {error_text}")
+                    return None
+
+        except Exception as e:
+            _LOGGER.warning(f"⚠️ Error getting thermal rates: {e}")
+            return None
+
+    async def _send_hourly_batch(self, _):
+        """Send hourly batch of readings with weather and thermal rates at the top of each hour."""
+        if not self.pending_readings:
+            _LOGGER.info("⏰ Hourly batch check - no pending readings to send")
+            return
+
+        current_time = datetime.now()
+        _LOGGER.info(f"⏰ Hourly batch upload at {current_time.strftime('%H:%M:%S')} - sending {len(self.pending_readings)} readings with weather and rates")
+        await self._send_enriched_sensor_batch()
+
+    async def _create_thermal_rate_sensors(self, thermal_rates: Dict):
+        """Create Home Assistant sensors with calculated thermal rates."""
         try:
             # These will be used by the thermal learning system
             if 'heating_rate' in thermal_rates and thermal_rates['heating_rate']:
@@ -439,7 +536,7 @@ class SimpleDataCollector:
                 )
 
         except Exception as e:
-            _LOGGER.error(f"Error updating thermal rate sensors: {e}")
+            _LOGGER.error(f"Error creating thermal rate sensors: {e}")
 
     def log_user_input(self, service: str, data: Dict):
         """Log a user input/service call for today's summary."""
@@ -465,10 +562,7 @@ class SimpleDataCollector:
             calculation_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 
             payload = {
-                'anonymous_id': self.anonymous_id,
-                'date': calculation_date,
-                'user_inputs': {'manual_calculation': True},
-                'weather_forecast': None
+                'anonymous_id': self.anonymous_id
             }
 
             headers = {
@@ -480,7 +574,7 @@ class SimpleDataCollector:
             _LOGGER.info(f"  Requesting thermal rates for date: {calculation_date}")
 
             async with session.post(
-                f"{self.data_endpoint}/daily-summary",
+                f"{self.data_endpoint}/calculate-rates",
                 json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=30)
@@ -495,7 +589,7 @@ class SimpleDataCollector:
                     _LOGGER.info(f"  Natural rate: {thermal_rates.get('natural_rate', 'None')} °F/hr ({thermal_rates.get('natural_samples', 0)} samples)")
 
                     if thermal_rates:
-                        await self._update_thermal_rate_sensors(thermal_rates)
+                        await self._create_thermal_rate_sensors(thermal_rates)
                         _LOGGER.info("  ✅ Updated Home Assistant sensors with thermal rates")
                     else:
                         _LOGGER.warning("  ⚠️ No thermal rates calculated - may need more data")
@@ -564,7 +658,7 @@ class SimpleDataCollector:
         return {
             'pending_readings': len(self.pending_readings),
             'collection_active': self._unsub_5min is not None,
-            'daily_summary_active': self._unsub_midnight is not None,
+            'hourly_enriched_active': self._unsub_hourly is not None,
             'user_inputs_today': len(self.user_inputs_today),
             'anonymous_id': self.anonymous_id[:8] + "..." if self.anonymous_id else "None",
             'data_endpoint': self.data_endpoint
