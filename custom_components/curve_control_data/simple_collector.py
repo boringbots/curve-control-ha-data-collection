@@ -20,6 +20,7 @@ class SimpleDataCollector:
         self,
         hass: HomeAssistant,
         anonymous_id: str,
+        user_label: Optional[str] = None,
         temperature_entity: str,
         hvac_entity: str,
         thermostat_entity: str,
@@ -29,6 +30,7 @@ class SimpleDataCollector:
     ):
         self.hass = hass
         self.anonymous_id = anonymous_id
+        self.user_label = user_label
         self.temperature_entity = temperature_entity
         self.hvac_entity = hvac_entity
         self.thermostat_entity = thermostat_entity
@@ -287,6 +289,7 @@ class SimpleDataCollector:
 
             payload = {
                 'anonymous_id': self.anonymous_id,
+                'user_label': self.user_label,
                 'readings': self.pending_readings
             }
 
@@ -347,6 +350,7 @@ class SimpleDataCollector:
 
             payload = {
                 'anonymous_id': self.anonymous_id,
+                'user_label': self.user_label,
                 'readings': self.pending_readings,
                 'weather_forecast': weather_forecast,
                 'thermal_rates': thermal_rates,
@@ -489,7 +493,7 @@ class SimpleDataCollector:
             # Call backend to calculate rates for yesterday's data
             async with session.post(
                 f"{self.data_endpoint}/calculate-rates",
-                json={'anonymous_id': self.anonymous_id},
+                json={'anonymous_id': self.anonymous_id, 'user_label': self.user_label},
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
@@ -568,7 +572,8 @@ class SimpleDataCollector:
             calculation_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 
             payload = {
-                'anonymous_id': self.anonymous_id
+                'anonymous_id': self.anonymous_id,
+                'user_label': self.user_label
             }
 
             headers = {

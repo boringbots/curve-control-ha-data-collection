@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from .const import (
     DOMAIN,
     CONF_ANONYMOUS_ID,
+    CONF_USER_LABEL,
 )
 from .simple_collector import SimpleDataCollector
 from .config_storage import ConfigStorage
@@ -46,6 +47,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         collector = SimpleDataCollector(
             hass=hass,
             anonymous_id=anonymous_id,
+            user_label=entry.data.get(CONF_USER_LABEL),
             temperature_entity=entry.data.get('temperature_entity'),
             hvac_entity=entry.data.get('hvac_entity'),
             thermostat_entity=entry.data.get('thermostat_entity'),

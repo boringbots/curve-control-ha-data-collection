@@ -16,6 +16,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .const import (
     DOMAIN,
     CONF_DATA_ENDPOINT,
+    CONF_USER_LABEL,
     DEFAULT_DATA_ENDPOINT,
 )
 
@@ -93,6 +94,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Create the form schema with entity selection
         data_schema = vol.Schema(
             {
+                vol.Required(CONF_USER_LABEL): str,
                 vol.Required("temperature_entity"): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="sensor")
                 ),
@@ -120,6 +122,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=data_schema,
             errors=errors,
             description_placeholders={
+                "user_label": "Friendly name for this user (e.g., 'Main House', 'Guest House', 'John's Home')",
                 "temperature_entity": "Temperature sensor (e.g., sensor.thermostat_temperature)",
                 "hvac_entity": "HVAC action sensor (e.g., climate.thermostat)",
                 "thermostat_entity": "Thermostat entity (e.g., climate.thermostat)",

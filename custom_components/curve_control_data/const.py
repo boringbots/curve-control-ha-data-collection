@@ -8,6 +8,7 @@ CONF_DATA_ENDPOINT: Final = "data_endpoint"
 CONF_API_KEY: Final = "api_key"
 CONF_COLLECTION_LEVEL: Final = "collection_level"
 CONF_ANONYMOUS_ID: Final = "anonymous_id"
+CONF_USER_LABEL: Final = "user_label"
 
 # Defaults - CONFIGURED WITH YOUR SUPABASE PROJECT
 DEFAULT_DATA_ENDPOINT: Final = "https://bwtakgwvkeflttjytuje.supabase.co/functions/v1"
