@@ -47,12 +47,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         collector = SimpleDataCollector(
             hass=hass,
             anonymous_id=anonymous_id,
-            user_label=entry.data.get(CONF_USER_LABEL),
             temperature_entity=entry.data.get('temperature_entity'),
             hvac_entity=entry.data.get('hvac_entity'),
             thermostat_entity=entry.data.get('thermostat_entity'),
             humidity_entity=entry.data.get('humidity_entity'),
-            weather_entity=entry.data.get('weather_entity')
+            weather_entity=entry.data.get('weather_entity'),
+            user_label=entry.data.get(CONF_USER_LABEL)
         )
         await collector.async_start()
         _LOGGER.info("✅ Data collector created and started successfully")

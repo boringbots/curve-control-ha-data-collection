@@ -20,12 +20,12 @@ class SimpleDataCollector:
         self,
         hass: HomeAssistant,
         anonymous_id: str,
-        user_label: Optional[str] = None,
         temperature_entity: str,
         hvac_entity: str,
         thermostat_entity: str,
         humidity_entity: Optional[str] = None,
         weather_entity: Optional[str] = None,
+        user_label: Optional[str] = None,
         data_endpoint: str = DEFAULT_DATA_ENDPOINT,
     ):
         self.hass = hass
