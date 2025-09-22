@@ -331,8 +331,14 @@ class SimpleDataCollector:
             return
 
         try:
-            # Get weather forecast
-            weather_forecast = await self._collect_weather_forecast()
+            # Only collect weather forecast during local midnight hour (00:00-00:59)
+            weather_forecast = None
+            current_hour = datetime.now().hour
+            if current_hour == 0:
+                _LOGGER.info("🌤️ Local midnight hour - collecting weather forecast")
+                weather_forecast = await self._collect_weather_forecast()
+            else:
+                _LOGGER.debug(f"⏰ Current hour {current_hour:02d} - skipping weather forecast collection")
 
             # Get thermal rates (calculated from yesterday's data)
             thermal_rates = await self._get_thermal_rates()
