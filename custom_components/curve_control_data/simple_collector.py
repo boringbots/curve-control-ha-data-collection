@@ -136,10 +136,13 @@ class SimpleDataCollector:
             if hvac_state.domain == 'climate':
                 _LOGGER.info(f"  🌡️ Processing CLIMATE entity...")
 
-                # First try hvac_action (current action)
+                # Priority order: hvac_action (current action) > hvac_mode > entity state
                 if 'hvac_action' in hvac_state.attributes:
                     final_hvac_action = hvac_state.attributes.get('hvac_action', 'off')
                     _LOGGER.info(f"  ✅ Using hvac_action: '{final_hvac_action}'")
+                elif 'hvac_mode' in hvac_state.attributes:
+                    final_hvac_action = hvac_state.attributes.get('hvac_mode', 'off')
+                    _LOGGER.info(f"  ✅ Using hvac_mode: '{final_hvac_action}'")
                 else:
                     # Fall back to current state (mode)
                     final_hvac_action = hvac_state.state
@@ -225,6 +228,8 @@ class SimpleDataCollector:
                         'max': 'high',
                         'minimum': 'low',
                         'min': 'low',
+                        'auto low': 'low',
+                        'circulation': 'med',
                         'none': 'auto',
                         '': 'auto'
                     }
